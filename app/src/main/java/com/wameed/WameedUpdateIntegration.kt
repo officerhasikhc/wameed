@@ -20,11 +20,12 @@ fun UpdateIntegration(
     val showUpdateNotification = remember { mutableStateOf(false) }
     val coroutineScope = rememberCoroutineScope()
     
-    // Check for updates on app start
+    // Check for updates on app start (silently)
     LaunchedEffect(Unit) {
         coroutineScope.launch {
-            delay(2000) // Wait a bit after app start
-            if (updateManager.checkForUpdates()) {
+            delay(3000) // Wait a bit after app start
+            // البحث التلقائي صامت (isManual = false) حتى لا تظهر حالة "جاري البحث" في الإعدادات فجأة
+            if (updateManager.checkForUpdates(isManual = false)) {
                 showUpdateNotification.value = true
             }
         }
@@ -46,7 +47,7 @@ fun UpdateIntegration(
                 updateManager.completeUpdate()
             }
             is UpdateState.Failed -> {
-                Toast.makeText(context, "فشل التحديث: ${state.errorCode}", Toast.LENGTH_LONG).show()
+                // نكتفي بالحالة في زر الإعدادات ولا داعي لإزعاج المستخدم برسالة Toast في الخلفية
                 showUpdateDialog.value = false
             }
             else -> {}

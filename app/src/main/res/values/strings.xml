@@ -66,7 +66,7 @@
     <string name="pc_label">الكمبيوتر: %s</string>
     <string name="not_connected">غير متصل</string>
     <string name="about_title">عن وميض</string>
-    <string name="about_version">الإصدار 1.2.0</string>
+    <string name="about_version">الإصدار %s</string>
     <string name="about_detail">ومضة نحو شاشتك</string>
 
     <!-- WameedSender & ConnectionService -->
@@ -166,19 +166,22 @@
     <string name="bug_report_empty">يرجى كتابة وصف للمشكلة</string>
     
     <!-- نظام التحديث -->
-    <string name="update_available">تحديث متاح!</string>
+    <string name="update_available">تحديث جديد متاح</string>
     <string name="update_downloading">جاري التحميل...</string>
     <string name="update_installing">جاري التثبيت...</string>
-    <string name="update_description">توجد نسخة جديدة من تطبيق وميض. نوصي بالتحديث للحصول على أفضل تجربة وميزات جديدة.</string>
+    <string name="update_description">نسخة أحدث متاحة. التحديث يحمل تحسينات وميزات جديدة.</string>
     <string name="update_downloading_desc">يتم الآن تحميل التحديث. يرجى الانتظار...</string>
     <string name="update_installing_desc">يتم الآن تثبيت التحديث. سيتم إعادة تشغيل التطبيق قريباً.</string>
     <string name="update_later">لاحقاً</string>
     <string name="update_now">تحديث الآن</string>
     <string name="update_close">إغلاق</string>
     <string name="update_failed">فشل التحديث. يرجى المحاولة مرة أخرى.</string>
-    <string name="update_success">تم تحديث التطبيق بنجاح!</string>
+    <string name="update_success">تم التحديث بنجاح ✓</string>
     <string name="update_notification">🔄 تحديث متاح</string>
-    <string name="update_notification_desc">توجد نسخة جديدة من تطبيق وميض</string>
+    <string name="update_notification_desc">نسخة أحدث متاحة للتحديث</string>
     <string name="update_dismiss">تجاهل</string>
     <string name="update_progress">%d%%</string>
+    <string name="check_for_updates">البحث عن تحديثات</string>
+    <string name="checking_updates">جاري البحث عن تحديثات...</string>
+    <string name="app_up_to_date">أحدث إصدار مثبت ✓</string>
 </resources>

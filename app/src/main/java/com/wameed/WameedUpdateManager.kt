@@ -9,6 +9,7 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONObject
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -43,13 +44,29 @@ class WameedUpdateManager private constructor(private val context: Context) {
     
     /**
      * التحقق من وجود تحديثات من GitHub
+     * @param isManual إذا كان البحث يدوياً من الإعدادات لإظهار حالة التحميل
      */
-    suspend fun checkForUpdates(): Boolean {
+    suspend fun checkForUpdates(isManual: Boolean = false): Boolean {
+        if (isManual) _updateState.value = UpdateState.Checking
+        
         return withContext(Dispatchers.IO) {
             try {
+                if (isManual) delay(800) // تأخير بسيط لراحة عين المستخدم
                 val request = Request.Builder().url(UPDATE_JSON_URL).build()
                 client.newCall(request).execute().use { response ->
-                    if (!response.isSuccessful) return@withContext false
+                    if (!response.isSuccessful) {
+                        if (isManual) {
+                            // إذا كان الملف غير موجود (404)، نعتبره "لا يوجد تحديث جديد" بدلاً من "فشل"
+                            if (response.code == 404) {
+                                _updateState.value = UpdateState.UpToDate
+                            } else {
+                                _updateState.value = UpdateState.Failed(response.code)
+                            }
+                            delay(3000)
+                            _updateState.value = UpdateState.Idle
+                        }
+                        return@withContext false
+                    }
                     
                     val jsonData = response.body?.string() ?: return@withContext false
                     val jsonObject = JSONObject(jsonData)
@@ -66,11 +83,21 @@ class WameedUpdateManager private constructor(private val context: Context) {
                         true
                     } else {
                         _updateState.value = UpdateState.UpToDate
+                        // العودة للحالة العادية بعد 3 ثوانٍ إذا كان يدوياً
+                        if (isManual) {
+                            delay(3000)
+                            _updateState.value = UpdateState.Idle
+                        }
                         false
                     }
                 }
             } catch (e: Exception) {
                 crashReporter.logError("Failed to check for GitHub updates", e)
+                if (isManual) {
+                    _updateState.value = UpdateState.Failed(-1)
+                    delay(3000)
+                    _updateState.value = UpdateState.Idle
+                }
                 false
             }
         }
@@ -108,6 +135,7 @@ class WameedUpdateManager private constructor(private val context: Context) {
  */
 sealed class UpdateState {
     object Idle : UpdateState()
+    object Checking : UpdateState()
     object UpToDate : UpdateState()
     object Available : UpdateState()
     data class Downloading(val progress: Float) : UpdateState()

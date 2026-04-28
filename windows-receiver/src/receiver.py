@@ -43,7 +43,7 @@ if sys.stderr is None:
 import requests
 from threading import Timer
 
-VERSION = "1.1.0"
+VERSION = "1.3.0"
 UPDATE_URL = "https://raw.githubusercontent.com/officerhasikhc/wameed/main/update.json"
 
 def check_for_updates():

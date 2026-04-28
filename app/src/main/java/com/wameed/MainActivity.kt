@@ -58,6 +58,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.OutlinedTextField
@@ -70,6 +71,8 @@ import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.material.icons.filled.Update
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -430,7 +433,7 @@ fun MainScreen(sender: WameedSender, discovery: DeviceDiscovery, updateManager: 
             )
             1 -> HistoryTab(modifier = Modifier.padding(padding))
             2 -> ReceivedTab(modifier = Modifier.padding(padding))
-            3 -> SettingsTab(modifier = Modifier.padding(padding), onShowTrusted = { selectedTab = 4 })
+            3 -> SettingsTab(modifier = Modifier.padding(padding), updateManager = updateManager, onShowTrusted = { selectedTab = 4 })
             4 -> TrustedDevicesTab(modifier = Modifier.padding(padding), onBack = { selectedTab = 3 })
         }
     }
@@ -564,13 +567,10 @@ fun HistoryTab(modifier: Modifier) {
     val context = LocalContext.current
     var history by remember { mutableStateOf(WameedPrefs.getHistory(context)) }
 
-    val scrollState = rememberScrollState()
-
     Column(
         modifier = modifier
             .fillMaxSize()
             .background(Color(0xFFF8FAFC))
-            .verticalScroll(scrollState)
             .padding(horizontal = 20.dp, vertical = 16.dp)
     ) {
         Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween, Alignment.CenterVertically) {
@@ -596,7 +596,10 @@ fun HistoryTab(modifier: Modifier) {
                 }
             }
         } else {
-            LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            LazyColumn(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
                 items(history, key = { "${it.time}_${it.filename}" }) { entry ->
                     HistoryItem(entry)
                 }
@@ -648,13 +651,10 @@ fun ReceivedTab(modifier: Modifier) {
     val context = LocalContext.current
     var files by remember { mutableStateOf(listReceivedFiles(context)) }
 
-    val scrollState = rememberScrollState()
-
     Column(
         modifier = modifier
             .fillMaxSize()
             .background(Color(0xFFF8FAFC))
-            .verticalScroll(scrollState)
             .padding(horizontal = 20.dp, vertical = 16.dp)
     ) {
         Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween, Alignment.CenterVertically) {
@@ -686,7 +686,10 @@ fun ReceivedTab(modifier: Modifier) {
                 }
             }
         } else {
-            LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            LazyColumn(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
                 items(files, key = { it.uri.toString() }) { file ->
                     ReceivedFileItem(file, context)
                 }
@@ -919,7 +922,7 @@ private fun getMimeType(filename: String): String {
 }
 
 @Composable
-fun SettingsTab(modifier: Modifier, onShowTrusted: () -> Unit) {
+fun SettingsTab(modifier: Modifier, updateManager: WameedUpdateManager, onShowTrusted: () -> Unit) {
     val context = LocalContext.current
     var displayMode by remember { mutableStateOf(WameedPrefs.getDisplayMode(context)) }
 
@@ -1154,8 +1157,55 @@ fun SettingsTab(modifier: Modifier, onShowTrusted: () -> Unit) {
             Column(Modifier.padding(18.dp)) {
                 Text(stringResource(R.string.about_title), fontWeight = FontWeight.Bold, fontSize = 15.sp)
                 Spacer(Modifier.height(6.dp))
-                Text(stringResource(R.string.about_version), fontSize = 12.sp, color = Color.Gray)
+                Text(stringResource(R.string.about_version, BuildConfig.VERSION_NAME), fontSize = 12.sp, color = Color.Gray)
                 Text(stringResource(R.string.about_detail), fontSize = 12.sp, color = Color.Gray)
+                
+                Spacer(Modifier.height(16.dp))
+                
+                val updateState by updateManager.updateState.collectAsState()
+                val scope = rememberCoroutineScope()
+                
+                Button(
+                    onClick = {
+                        scope.launch {
+                            updateManager.checkForUpdates(isManual = true)
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth().height(44.dp),
+                    enabled = updateState !is UpdateState.Checking,
+                    shape = RoundedCornerShape(12.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = if (updateState is UpdateState.UpToDate) Color(0xFF2E7D32) else Color(0xFF43A047),
+                        contentColor = Color.White
+                    ),
+                    elevation = ButtonDefaults.buttonElevation(defaultElevation = 0.dp)
+                ) {
+                    if (updateState is UpdateState.Checking) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(16.dp),
+                            color = Color.White,
+                            strokeWidth = 2.dp
+                        )
+                        Spacer(Modifier.width(10.dp))
+                        Text(stringResource(R.string.checking_updates), fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                    } else {
+                        Icon(
+                            if (updateState is UpdateState.UpToDate) Icons.Default.CheckCircle else Icons.Default.Update, 
+                            null, 
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            text = when(updateState) {
+                                is UpdateState.UpToDate -> stringResource(R.string.app_up_to_date)
+                                is UpdateState.Failed -> "تعذر التحقق، حاول لاحقاً"
+                                else -> stringResource(R.string.check_for_updates)
+                            },
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
             }
         }
     }
@@ -1166,13 +1216,10 @@ fun TrustedDevicesTab(modifier: Modifier, onBack: () -> Unit) {
     val context = LocalContext.current
     var trustedIds by remember { mutableStateOf(WameedPrefs.getTrustedDevices(context).toList()) }
 
-    val scrollState = rememberScrollState()
-
     Column(
         modifier = modifier
             .fillMaxSize()
             .background(Color(0xFFF8FAFC))
-            .verticalScroll(scrollState)
             .padding(horizontal = 20.dp, vertical = 16.dp)
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -1188,7 +1235,10 @@ fun TrustedDevicesTab(modifier: Modifier, onBack: () -> Unit) {
                 Text(stringResource(R.string.no_trusted_devices), color = Color.Gray)
             }
         } else {
-            LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            LazyColumn(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
                 items(trustedIds) { id ->
                     Surface(
                         modifier = Modifier.fillMaxWidth(),

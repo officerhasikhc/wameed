@@ -58,7 +58,7 @@ fun WameedUpdateDialog(
                     // العنوان
                     Text(
                         text = when (updateState) {
-                            is UpdateState.Available -> "تحديث متاح!"
+                            is UpdateState.Available -> "تحديث جديد"
                             is UpdateState.Downloading -> "جاري التحميل..."
                             is UpdateState.Installing -> "جاري التثبيت..."
                             else -> "تحديث التطبيق"
@@ -71,9 +71,9 @@ fun WameedUpdateDialog(
                     // الوصف
                     Text(
                         text = when (updateState) {
-                            is UpdateState.Available -> "توجد نسخة جديدة من تطبيق وميض. نوصي بالتحديث للحصول على أفضل تجربة وميزات جديدة."
-                            is UpdateState.Downloading -> "يتم الآن تحميل التحديث. يرجى الانتظار..."
-                            is UpdateState.Installing -> "يتم الآن تثبيت التحديث. سيتم إعادة تشغيل التطبيق قريباً."
+                            is UpdateState.Available -> "نسخة أحدث متاحة. التحديث يحمل تحسينات وميزات جديدة."
+                            is UpdateState.Downloading -> "يتم تحميل التحديث..."
+                            is UpdateState.Installing -> "يتم تثبيت التحديث..."
                             else -> "تحديث التطبيق"
                         },
                         fontSize = 14.sp,
@@ -148,7 +148,7 @@ fun WameedUpdateDialog(
                                 verticalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
                                 Text(
-                                    text = "فشل التحديث. يرجى المحاولة مرة أخرى.",
+                                    text = "تعذر التحديث، حاول لاحقاً",
                                     fontSize = 12.sp,
                                     color = MaterialTheme.colorScheme.error,
                                     textAlign = TextAlign.Center
@@ -211,7 +211,7 @@ fun WameedUpdateNotification(
                     modifier = Modifier.weight(1f)
                 ) {
                     Text(
-                        text = "🔄 تحديث متاح",
+                        text = "🔄 تحديث جديد",
                         fontSize = 14.sp,
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.onPrimaryContainer
