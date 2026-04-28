@@ -12,13 +12,25 @@ Set-Location $root
 
 # Single source of truth for release version. Must match `AppVersion` in
 # windows-receiver\installer\wameed.iss — if you bump one, bump the other.
-$version = "1.3.1"
+$version = "1.3.0"
 
 Write-Host ""
 Write-Host "┌─────────────────────────────────────────────────┐" -ForegroundColor Cyan
 Write-Host "│  بناء حزمة وميض v$version                          │" -ForegroundColor Cyan
 Write-Host "└─────────────────────────────────────────────────┘" -ForegroundColor Cyan
 Write-Host ""
+
+# ─── [0/4] تنظيف الملفات القديمة ────────────────────────────────────
+Write-Host "[0/4] تنظيف الملفات القديمة لضمان الحداثة..." -ForegroundColor Yellow
+
+# إغلاق البرنامج إذا كان يعمل لتجنب Access is denied
+Get-Process "Wameed" -ErrorAction SilentlyContinue | Stop-Process -Force
+Start-Sleep -Seconds 1 # انتظار لحظة للتأكد من إغلاق الملفات
+
+Remove-Item -Recurse -Force "$root\release" -ErrorAction SilentlyContinue
+Remove-Item -Recurse -Force "$root\windows-receiver\dist" -ErrorAction SilentlyContinue
+Remove-Item -Recurse -Force "$root\windows-receiver\installer\Output" -ErrorAction SilentlyContinue
+Remove-Item -Force "$root\Wameed-v$version.zip" -ErrorAction SilentlyContinue
 
 # ─── [1/4] بناء PC (exe + installer) ────────────────────────────────
 Write-Host "[1/4] بناء برنامج PC..." -ForegroundColor Yellow

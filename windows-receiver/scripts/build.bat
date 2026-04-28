@@ -61,12 +61,11 @@ if errorlevel 1 (
 
 echo.
 echo [5/5] Cleaning intermediate build artifacts...
-REM Installer succeeded - dist/Wameed.exe is now redundant; keep only the installer.
 if exist build rmdir /s /q build
-if exist dist  rmdir /s /q dist
+REM We KEEP dist/ folder because package-release.ps1 needs it
 
 echo.
 echo =================================================
-echo  [DONE] Installer: installer\Output\WameedSetup-1.0.0.exe
+echo  [DONE] Build Finished
 echo =================================================
 exit /b 0
