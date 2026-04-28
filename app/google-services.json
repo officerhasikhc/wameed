@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "527167196652",
+    "project_id": "wameed-7f34d",
+    "storage_bucket": "wameed-7f34d.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:527167196652:android:ea209673a183956998c4c9",
+        "android_client_info": {
+          "package_name": "com.wameed"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDrejM5LhWMOeFKKMZ3rFmIH2ligl9YaSA"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

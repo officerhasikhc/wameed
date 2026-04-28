@@ -1,0 +1,14 @@
+{
+  "android": {
+    "versionCode": 4,
+    "versionName": "1.3.0",
+    "updateUrl": "https://github.com/YOUR_USERNAME/wameed/releases/download/v1.3.0/Wameed-Android.apk",
+    "isForceUpdate": false,
+    "releaseNotes": "تحسينات في سرعة النقل وإصلاح بعض الأخطاء."
+  },
+  "windows": {
+    "version": "1.2.0",
+    "updateUrl": "https://github.com/YOUR_USERNAME/wameed/releases/download/v1.2.0/WameedSetup.exe",
+    "releaseNotes": "إضافة ميزة التحديث التلقائي وتحسين واجهة المستخدم."
+  }
+}
