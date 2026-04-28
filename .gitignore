@@ -13,7 +13,13 @@
 .externalNativeBuild
 .cxx
 local.properties
-
+.idea/
+.kotlin/
+build/
+*.log
+*.zip
+*.jks
+local.properties
 # Keystore properties (sensitive data)
 keystore.properties
 
