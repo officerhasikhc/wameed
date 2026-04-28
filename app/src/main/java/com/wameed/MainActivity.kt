@@ -138,13 +138,11 @@ class MainActivity : ComponentActivity() {
     
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
-        updateManager.handleActivityResult(requestCode, resultCode)
     }
     
     override fun onDestroy() {
         super.onDestroy()
         discovery.stop()
-        updateManager.cleanup()
         // We no longer stop the service here to allow it to keep the app alive in background
         // and to avoid ForegroundServiceDidNotStartInTimeException race conditions.
     }

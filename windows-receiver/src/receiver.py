@@ -40,14 +40,29 @@ if sys.stdout is None:
 if sys.stderr is None:
     sys.stderr = open(os.devnull, "w")
 
-# Fix taskbar icon: tell Windows this is a separate app, not python.exe
-try:
-    import ctypes
-    # Tell Windows this is a separate app for taskbar grouping
-    ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("com.wameed.receiver")
-    # Fix blurry UI on high-DPI screens and potential rendering issues (white screen)
+import requests
+from threading import Timer
+
+VERSION = "1.1.0"
+UPDATE_URL = "https://raw.githubusercontent.com/officerhasikhc/wameed/main/update.json"
+
+def check_for_updates():
     try:
-        ctypes.windll.shcore.SetProcessDpiAwareness(1)
+        response = requests.get(UPDATE_URL, timeout=5)
+        if response.status_code == 200:
+            data = response.json()
+            remote_version = data['windows']['version']
+            if remote_version > VERSION:
+                if messagebox.askyesno("تحديث جديد", f"إصدار جديد متوفر: {remote_version}\nهل تريد تحميل التحديث الآن؟"):
+                    webbrowser.open(data['windows']['updateUrl'])
+    except Exception as e:
+        print(f"Update check failed: {e}")
+
+# في دالة بدء البرنامج، سنستدعي هذه الدالة بعد قليل من التشغيل
+def start_update_check():
+    Timer(5.0, check_for_updates).start()
+
+# سنقوم باستدعاء start_update_check() داخل الكود الرئيسي لاحقاً
     except Exception:
         # Fallback for older Windows (7/8)
         try: ctypes.windll.user32.SetProcessDPIAware()

@@ -1,5 +1,6 @@
+requests>=2.31.0
 websockets>=12.0,<15.0
 pystray>=0.19
 Pillow>=10.0
 zeroconf>=0.131.0
-tkinterdnd2>=0.3.0  # optional: drag-and-drop file support in send dialog
+tkinterdnd2>=0.3.0

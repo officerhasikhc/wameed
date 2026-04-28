@@ -2,40 +2,35 @@ package com.wameed
 
 import android.app.Activity
 import android.content.Context
+import android.content.Intent
+import android.net.Uri
 import androidx.compose.runtime.mutableFloatStateOf
-import com.google.android.play.core.appupdate.AppUpdateInfo
-import com.google.android.play.core.appupdate.AppUpdateManager
-import com.google.android.play.core.appupdate.AppUpdateManagerFactory
-import com.google.android.play.core.appupdate.AppUpdateOptions
-import com.google.android.play.core.install.model.AppUpdateType
-import com.google.android.play.core.install.InstallStateUpdatedListener
-import com.google.android.play.core.install.InstallState
-import com.google.android.play.core.install.model.InstallStatus
-import com.google.android.play.core.install.model.ActivityResult.RESULT_IN_APP_UPDATE_FAILED
-import kotlinx.coroutines.tasks.await
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import org.json.JSONObject
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
 /**
- * مدير التحديث التلقائي لتطبيق وميض
- * يستخدم Google Play In-App Update API للتحديثات الاختيارية
+ * مدير التحديث التلقائي لتطبيق وميض عبر GitHub
  */
-class WameedUpdateManager private constructor(context: Context) {
+class WameedUpdateManager private constructor(private val context: Context) {
     
-    private val appUpdateManager: AppUpdateManager = AppUpdateManagerFactory.create(context)
+    private val client = OkHttpClient()
     private val crashReporter = WameedCrashReporter.getInstance()
+    private val UPDATE_JSON_URL = "https://raw.githubusercontent.com/officerhasikhc/wameed/main/update.json"
+    
+    private var pendingUpdateUrl: String? = null
+    private var pendingReleaseNotes: String? = null
     
     // حالة التحديث
     private val _updateState = MutableStateFlow<UpdateState>(UpdateState.Idle)
     val updateState: StateFlow<UpdateState> = _updateState.asStateFlow()
     
-    // تقدم التحديث
-    val updateProgress = mutableFloatStateOf(0f)
-    
     companion object {
-        private const val UPDATE_REQUEST_CODE = 1234
-        
         @Volatile
         private var INSTANCE: WameedUpdateManager? = null
         
@@ -47,171 +42,64 @@ class WameedUpdateManager private constructor(context: Context) {
     }
     
     /**
-     * مراقب حالة التثبيت
-     */
-    private val installStateUpdatedListener = object : InstallStateUpdatedListener {
-        override fun onStateUpdate(state: InstallState) {
-            when (state.installStatus()) {
-                InstallStatus.DOWNLOADING -> {
-                    val progress = state.bytesDownloaded().toFloat() / state.totalBytesToDownload().toFloat()
-                    updateProgress.floatValue = progress
-                    _updateState.value = UpdateState.Downloading(progress)
-                    crashReporter.log("Update downloading: ${(progress * 100).toInt()}%")
-                }
-                InstallStatus.DOWNLOADED -> {
-                    _updateState.value = UpdateState.Downloaded
-                    crashReporter.log("Update downloaded, waiting for completion")
-                }
-                InstallStatus.INSTALLING -> {
-                    _updateState.value = UpdateState.Installing
-                    crashReporter.log("Update installing...")
-                }
-                InstallStatus.INSTALLED -> {
-                    _updateState.value = UpdateState.Installed
-                    crashReporter.log("Update installed successfully")
-                    appUpdateManager.unregisterListener(this)
-                }
-                InstallStatus.FAILED -> {
-                    _updateState.value = UpdateState.Failed(state.installErrorCode())
-                    crashReporter.logError("Update failed with code: ${state.installErrorCode()}")
-                    appUpdateManager.unregisterListener(this)
-                }
-                InstallStatus.CANCELED -> {
-                    _updateState.value = UpdateState.Canceled
-                    crashReporter.log("Update canceled by user")
-                    appUpdateManager.unregisterListener(this)
-                }
-                else -> {
-                    // حالات أخرى مثل PENDING, DOWNLOADED
-                    crashReporter.log("Update status: ${state.installStatus()}")
-                }
-            }
-        }
-    }
-    
-    /**
-     * التحقق من وجود تحديثات
+     * التحقق من وجود تحديثات من GitHub
      */
     suspend fun checkForUpdates(): Boolean {
-        return try {
-            val appUpdateInfo = appUpdateManager.appUpdateInfo.await()
-            val isUpdateAvailable = appUpdateInfo.availableVersionCode() > BuildConfig.VERSION_CODE
-            
-            if (isUpdateAvailable) {
-                _updateState.value = UpdateState.Available(appUpdateInfo)
-                crashReporter.log("Update available: ${appUpdateInfo.availableVersionCode()}")
-                true
-            } else {
-                _updateState.value = UpdateState.UpToDate
-                crashReporter.log("App is up to date")
+        return withContext(Dispatchers.IO) {
+            try {
+                val request = Request.Builder().url(UPDATE_JSON_URL).build()
+                client.newCall(request).execute().use { response ->
+                    if (!response.isSuccessful) return@withContext false
+                    
+                    val jsonData = response.body?.string() ?: return@withContext false
+                    val jsonObject = JSONObject(jsonData)
+                    val androidJson = jsonObject.getJSONObject("android")
+                    
+                    val remoteVersionCode = androidJson.getInt("versionCode")
+                    val updateUrl = androidJson.getString("updateUrl")
+                    val releaseNotes = androidJson.getString("releaseNotes")
+                    
+                    if (remoteVersionCode > BuildConfig.VERSION_CODE) {
+                        pendingUpdateUrl = updateUrl
+                        pendingReleaseNotes = releaseNotes
+                        _updateState.value = UpdateState.Available
+                        true
+                    } else {
+                        _updateState.value = UpdateState.UpToDate
+                        false
+                    }
+                }
+            } catch (e: Exception) {
+                crashReporter.logError("Failed to check for GitHub updates", e)
                 false
             }
-        } catch (e: Exception) {
-            crashReporter.logError("Failed to check for updates", e)
-            _updateState.value = UpdateState.Error(e.message ?: "Unknown error")
-            false
         }
     }
-    
-    /**
-     * بدء التحديث المرن (اختياري)
-     */
+
     fun startFlexibleUpdate(activity: Activity) {
-        val currentState = _updateState.value
-        if (currentState !is UpdateState.Available) {
-            return
-        }
-        
-        try {
-            appUpdateManager.registerListener(installStateUpdatedListener)
-            
-            appUpdateManager.startUpdateFlowForResult(
-                currentState.appUpdateInfo,
-                activity,
-                AppUpdateOptions.newBuilder(AppUpdateType.FLEXIBLE).build(),
-                UPDATE_REQUEST_CODE
-            )
-            
-            _updateState.value = UpdateState.Downloading(0f)
-            crashReporter.log("Flexible update started")
-        } catch (e: Exception) {
-            crashReporter.logError("Failed to start flexible update", e)
-            _updateState.value = UpdateState.Error(e.message ?: "Failed to start update")
+        pendingUpdateUrl?.let { url ->
+            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
+            activity.startActivity(intent)
+            // For now, since we just open browser, we can't easily track progress
+            // So we might just stay in Available or move to Idle
         }
     }
-    
-    /**
-     * بدء التحديث الفوري (إلزامي)
-     */
-    fun startImmediateUpdate(activity: Activity) {
-        val currentState = _updateState.value
-        if (currentState !is UpdateState.Available) {
-            return
-        }
-        
-        try {
-            appUpdateManager.startUpdateFlowForResult(
-                currentState.appUpdateInfo,
-                activity,
-                AppUpdateOptions.newBuilder(AppUpdateType.IMMEDIATE).build(),
-                UPDATE_REQUEST_CODE
-            )
-            
-            _updateState.value = UpdateState.Updating
-            crashReporter.log("Immediate update started")
-        } catch (e: Exception) {
-            crashReporter.logError("Failed to start immediate update", e)
-            _updateState.value = UpdateState.Error(e.message ?: "Failed to start update")
-        }
-    }
-    
-    /**
-     * إكمال التحديث (للتحديث المرن)
-     */
+
     fun completeUpdate() {
-        try {
-            appUpdateManager.completeUpdate()
-            crashReporter.log("Update completion triggered")
-        } catch (e: Exception) {
-            crashReporter.logError("Failed to complete update", e)
-        }
+        // Typically used to restart app after Play Store update
     }
-    
-    /**
-     * معالجة نتيجة طلب التحديث
-     */
-    fun handleActivityResult(requestCode: Int, resultCode: Int): Boolean {
-        if (requestCode == UPDATE_REQUEST_CODE) {
-            return when (resultCode) {
-                Activity.RESULT_OK -> {
-                    crashReporter.log("Update flow accepted by user")
-                    true
-                }
-                Activity.RESULT_CANCELED -> {
-                    _updateState.value = UpdateState.Canceled
-                    crashReporter.log("Update flow canceled by user")
-                    true
-                }
-                RESULT_IN_APP_UPDATE_FAILED -> {
-                    _updateState.value = UpdateState.Failed(-1)
-                    crashReporter.logError("In-app update failed")
-                    true
-                }
-                else -> false
-            }
-        }
-        return false
+
+    fun downloadAndInstallUpdate(activity: Activity, url: String) {
+        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
+        activity.startActivity(intent)
     }
-    
-    /**
-     * تنظيف الموارد
-     */
+
+    fun handleActivityResult(requestCode: Int, resultCode: Int) {
+        // Not needed for GitHub-based updates
+    }
+
     fun cleanup() {
-        try {
-            appUpdateManager.unregisterListener(installStateUpdatedListener)
-        } catch (e: Exception) {
-            crashReporter.logError("Failed to cleanup update manager", e)
-        }
+        // Not needed for GitHub-based updates
     }
 }
 
@@ -221,13 +109,11 @@ class WameedUpdateManager private constructor(context: Context) {
 sealed class UpdateState {
     object Idle : UpdateState()
     object UpToDate : UpdateState()
-    data class Available(val appUpdateInfo: AppUpdateInfo) : UpdateState()
+    object Available : UpdateState()
     data class Downloading(val progress: Float) : UpdateState()
+    object Downloaded : UpdateState()
     object Installing : UpdateState()
     object Installed : UpdateState()
-    object Downloaded : UpdateState()
-    object Updating : UpdateState()
-    object Canceled : UpdateState()
     data class Failed(val errorCode: Int) : UpdateState()
-    data class Error(val message: String) : UpdateState()
 }
+
