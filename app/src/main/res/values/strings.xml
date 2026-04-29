@@ -195,5 +195,6 @@
     <string name="pairing_approval_hint">افتح نافذة وميض على الكمبيوتر واضغط "Yes" للسماح بالاتصال</string>
     <string name="error_too_many_files">لا يمكن اختيار أكثر من 10 ملفات</string>
     <string name="attached_files">الملفات المرفقة (%d)</string>
+    <string name="status_connected_to">متصل بـ {name}</string>
     <string name="send_all">إرسال الكل</string>
 </resources>

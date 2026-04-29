@@ -95,5 +95,10 @@
             </intent-filter>
         </receiver>
 
+        <!-- Preload Cairo Arabic font from Google Fonts -->
+        <meta-data
+            android:name="preloaded_fonts"
+            android:resource="@array/preloaded_fonts" />
+
     </application>
 </manifest>

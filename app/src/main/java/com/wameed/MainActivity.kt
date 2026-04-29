@@ -38,13 +38,13 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.List
+import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Download
-import androidx.compose.material.icons.filled.OpenInNew
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
@@ -145,10 +145,6 @@ class MainActivity : ComponentActivity() {
         }
     }
     
-    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
-        super.onActivityResult(requestCode, resultCode, data)
-    }
-    
     override fun onDestroy() {
         super.onDestroy()
         discovery.stop()
@@ -212,15 +208,20 @@ fun MainScreen(sender: WameedSender, discovery: DeviceDiscovery, updateManager: 
     }
 
     fun sendSelectedFiles() {
-        if (selectedUris.isEmpty()) return
+        if (selectedUris.isEmpty()) {
+            Log.w("MainActivity", "محاولة إرسال فاشلة: لم يتم اختيار ملفات")
+            return
+        }
         
         val urisCopy = selectedUris.toList()
+        Log.i("MainActivity", "بدء عملية إرسال ${urisCopy.size} ملفات مختارة")
         isSendingBatch = true
         
         WameedConnectionService.start(context)
         
         sender.sendFiles(urisCopy, object : WameedSender.SendCallback {
             override fun onNextFile(index: Int, total: Int, fileName: String) {
+                Log.d("MainActivity", "إرسال ملف $index/$total: $fileName")
                 currentFileIndex = index
                 totalFilesCount = total
                 currentFileName = fileName
@@ -240,6 +241,7 @@ fun MainScreen(sender: WameedSender, discovery: DeviceDiscovery, updateManager: 
             }
 
             override fun onSuccess(message: String) {
+                Log.i("MainActivity", "✅ نجاح الإرسال: $message")
                 mainHandler.post {
                     isSendingBatch = false
                     selectedUris.clear()
@@ -249,6 +251,7 @@ fun MainScreen(sender: WameedSender, discovery: DeviceDiscovery, updateManager: 
             }
 
             override fun onError(error: String) {
+                Log.e("MainActivity", "❌ فشل الإرسال: $error")
                 mainHandler.post {
                     isSendingBatch = false
                     currentInfoStatus = ""
@@ -257,6 +260,7 @@ fun MainScreen(sender: WameedSender, discovery: DeviceDiscovery, updateManager: 
             }
 
             override fun onInfo(message: String) {
+                Log.i("MainActivity", "ℹ️ معلومة: $message")
                 mainHandler.post {
                     currentInfoStatus = message
                 }
@@ -265,6 +269,7 @@ fun MainScreen(sender: WameedSender, discovery: DeviceDiscovery, updateManager: 
     }
 
     fun connectToDevice(device: DeviceDiscovery.DiscoveredDevice) {
+        Log.i("MainActivity", "محاولة الربط مع الجهاز: ${device.name} (${device.address})")
         selectedDevice = device
         connectionState = ConnectionState.Connecting
         statusText = context.getString(R.string.connecting_to, device.name)
@@ -276,6 +281,7 @@ fun MainScreen(sender: WameedSender, discovery: DeviceDiscovery, updateManager: 
 
         sender.sendPing(object : WameedSender.SendCallback {
             override fun onSuccess(message: String) {
+                Log.i("MainActivity", "✅ تم الربط بنجاح مع ${device.name}")
                 mainHandler.post {
                     connectionState = ConnectionState.Connected
                     statusText = context.getString(R.string.connected_to, device.name)
@@ -283,6 +289,7 @@ fun MainScreen(sender: WameedSender, discovery: DeviceDiscovery, updateManager: 
                 }
             }
             override fun onError(error: String) {
+                Log.e("MainActivity", "❌ فشل الربط مع ${device.name}: $error")
                 mainHandler.post {
                     // التحقق إذا كان الخطأ بسبب رفض الاقتران
                     val isRejected = error.contains("رفض") || error.contains("rejected", ignoreCase = true)
@@ -295,6 +302,7 @@ fun MainScreen(sender: WameedSender, discovery: DeviceDiscovery, updateManager: 
                 }
             }
             override fun onInfo(message: String) {
+                Log.d("MainActivity", "ℹ️ حالة الربط: $message")
                 mainHandler.post {
                     // عند انتظار موافقة الاقتران
                     if (message.contains("انتظار") || message.contains("waiting", ignoreCase = true)) {
@@ -319,19 +327,32 @@ fun MainScreen(sender: WameedSender, discovery: DeviceDiscovery, updateManager: 
                 if (device.name.isNotBlank() && device.name != device.ip) {
                     WameedPrefs.setPcName(context, device.name)
                 }
+                
                 val savedName = WameedPrefs.getPcName(context)
                 val savedIp = WameedPrefs.getPcIp(context)
                 val savedPort = WameedPrefs.getPcPort(context)
+                
+                // فحص هل هذا هو الجهاز المفضل (نفس الاسم أو نفس الـ IP)
+                val isLastDevice = (savedIp == device.ip && savedPort == device.port) ||
+                        (device.name.isNotBlank() && device.name == savedName)
+
+                if (isLastDevice && connectionState != ConnectionState.Connected && connectionState != ConnectionState.Connecting) {
+                    Log.i("Wameed", "Auto-connecting to known device: ${device.name} at ${device.ip}")
+                    mainHandler.post {
+                        connectToDevice(device)
+                    }
+                }
+
                 val sameName = device.name.isNotBlank()
                         && device.name != device.ip
                         && device.name.equals(savedName, ignoreCase = true)
                 val ipChanged = savedIp.isNotEmpty()
                         && (savedIp != device.ip || savedPort != device.port)
+                
                 if (sameName && ipChanged) {
                     Log.i("Wameed",
                         "PC IP changed: $savedIp:$savedPort \u2192 ${device.ip}:${device.port} (name=${device.name})")
                     WameedPrefs.savePcAddress(context, "${device.ip}:${device.port}")
-                    // فوراً قم بتحديث الخدمة للاتصال بالعنوان الجديد
                     WameedConnectionService.start(context)
                 }
             }
@@ -892,7 +913,7 @@ fun ReceivedFileItem(file: ReceivedFileInfo, context: Context) {
                 Text("$sizeText  \u2022  $dateText", fontSize = 11.sp, color = Color.Gray)
             }
             IconButton(onClick = { openFile(context, file) }, modifier = Modifier.size(36.dp)) {
-                Icon(Icons.Default.OpenInNew, stringResource(R.string.open_file),
+                Icon(Icons.AutoMirrored.Filled.OpenInNew, stringResource(R.string.open_file),
                     tint = Color(0xFF3B82F6), modifier = Modifier.size(20.dp))
             }
             IconButton(onClick = { shareFile(context, file) }, modifier = Modifier.size(36.dp)) {

@@ -30,7 +30,7 @@ class ShareActivity : Activity() {
 
         sender = WameedSender(this)
 
-        if (!WameedPrefs.isConfigured(this)) {
+        if (!WameedPrefs.isConfigured(this) && !WameedConnectionService.isRunning) {
             showSetupNeeded()
             return
         }

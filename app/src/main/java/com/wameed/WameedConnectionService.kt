@@ -52,7 +52,9 @@ class WameedConnectionService : Service() {
     private var ws: WebSocket? = null
     private var receiverServer: WameedServer? = null
     private var nsdHelper: WameedNsdHelper? = null
+    private var discoveryResponder: WameedDiscoveryResponder? = null
     private var isReceiving = false
+    private var isDiscovering = false
     private var pingFailures = 0
     @Volatile private var lastActivity: Long = System.currentTimeMillis()
     @Volatile private var lastReceiveActivity: Long = 0L
@@ -142,7 +144,20 @@ class WameedConnectionService : Service() {
             val i = Intent(context, WameedConnectionService::class.java).apply {
                 action = ACTION_REFRESH
             }
-            context.startService(i)
+            try {
+                if (isRunning) {
+                    context.startService(i)
+                } else {
+                    // If not running, start as foreground to be safe
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                        context.startForegroundService(i)
+                    } else {
+                        context.startService(i)
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e("WameedKeepAlive", "Failed to refresh service", e)
+            }
         }
     }
 
@@ -312,6 +327,53 @@ class WameedConnectionService : Service() {
         Log.i(TAG, "Service destroyed")
     }
 
+    // ------------------------- Discovery -------------------------
+    private fun startBackgroundDiscovery() {
+        if (isDiscovering) return
+        isDiscovering = true
+
+        Log.i(TAG, "بدء البحث التلقائي عن الكمبيوتر في الخلفية...")
+        val discovery = DeviceDiscovery()
+        discovery.startListening(this, timeoutSeconds = 10, object : DeviceDiscovery.DiscoveryCallback {
+            override fun onDeviceFound(device: DeviceDiscovery.DiscoveredDevice) {
+                Log.i(TAG, "✅ اكتشاف الكمبيوتر تلقائياً: ${device.name} (${device.address})")
+                
+                val oldIp = WameedPrefs.getPcIp(this@WameedConnectionService)
+                val oldPort = WameedPrefs.getPcPort(this@WameedConnectionService)
+                
+                if (oldIp != device.ip || oldPort != device.port) {
+                    Log.i(TAG, "تحديث عنوان الكمبيوتر: $oldIp:$oldPort \u2192 ${device.address}")
+                }
+                
+                // Update prefs with new IP
+                WameedPrefs.savePcAddress(this@WameedConnectionService, device.address)
+                WameedPrefs.setPcName(this@WameedConnectionService, device.name)
+                
+                pcDisplay = device.name
+                pingFailures = 0 // Reset failures
+                
+                // Stop discovery early and reconnect
+                discovery.stop()
+                isDiscovering = false
+                
+                handler.post { 
+                    Log.d(TAG, "إعادة الاتصال بالكمبيوتر المكتشف حديثاً...")
+                    openWs() 
+                }
+            }
+
+            override fun onError(error: String) {
+                Log.e(TAG, "❌ خطأ أثناء البحث في الخلفية: $error")
+                isDiscovering = false
+            }
+
+            override fun onSearchFinished() {
+                Log.d(TAG, "انتهى البحث في الخلفية")
+                isDiscovering = false
+            }
+        })
+    }
+
     // ------------------------- WebSocket -------------------------
     private fun openWs() {
         val url = WameedPrefs.getWsUrl(this)
@@ -331,6 +393,7 @@ class WameedConnectionService : Service() {
                     put("name", deviceName) // redundant but safer for some PC versions
                     put("device_id", WameedPrefs.getOrCreateDeviceId(this@WameedConnectionService))
                     put("app_version", BuildConfig.VERSION_NAME)
+                    put("receiver_port", 7789)
                 }
                 webSocket.send(hello.toString())
                 pingFailures = 0
@@ -349,8 +412,16 @@ class WameedConnectionService : Service() {
                 ws = null
                 pingFailures++
                 WameedEvents.tryEmit(WameedEvent.ServiceStatus(false, pcDisplay))
+                
                 if (pingFailures >= MAX_PING_FAILURES) {
-                    stopSelfCleanly("ws-dead")
+                    if (!isDiscovering) {
+                        Log.i(TAG, "Connection lost to $pcDisplay. Starting background discovery...")
+                        startBackgroundDiscovery()
+                    } else {
+                        // If we are already discovering and still failing, maybe the PC is offline.
+                        // We'll let the idle timer eventually stop the service.
+                        Log.d(TAG, "Already discovering or PC is offline.")
+                    }
                 }
             }
 
@@ -467,6 +538,12 @@ class WameedConnectionService : Service() {
         if (receiverServer == null) {
             receiverServer = WameedServer(this)
             receiverServer?.setCallback(object : WameedServer.ServerCallback {
+                override fun onDeviceConnected(name: String, ip: String) {
+                    pcDisplay = name
+                    // Update notification if needed
+                    ensureForeground()
+                }
+
                 override fun onFileTransferStarted(filename: String, size: Long) {
                     WameedEvents.tryEmit(WameedEvent.ReceiveMeta(filename, size))
                     // Note: We do NOT open ReceiveActivity here anymore.
@@ -475,6 +552,7 @@ class WameedConnectionService : Service() {
                 }
 
                 override fun onProgress(percent: Int, speedMbps: Double) {
+                    lastActivity = System.currentTimeMillis() // Reset idle timer during active transfer
                     WameedEvents.tryEmit(WameedEvent.ReceiveProgress(percent, speedMbps))
                 }
 
@@ -543,6 +621,11 @@ class WameedConnectionService : Service() {
             nsdHelper = WameedNsdHelper(this)
         }
         nsdHelper?.registerService(7789)
+
+        if (discoveryResponder == null) {
+            discoveryResponder = WameedDiscoveryResponder(this)
+        }
+        discoveryResponder?.start()
         
         // تحديث الإشعار
         val notification = buildNotification(
@@ -560,6 +643,7 @@ class WameedConnectionService : Service() {
         isReceiving = false
         receiverServer?.stop()
         nsdHelper?.unregisterService()
+        discoveryResponder?.stop()
         Log.i(TAG, "Receiving mode stopped")
         
         // إعادة الإشعار للوضع الطبيعي إذا كانت الخدمة لا تزال تعمل

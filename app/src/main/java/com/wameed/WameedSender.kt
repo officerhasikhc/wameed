@@ -76,17 +76,23 @@ class WameedSender(private val context: Context) {
         val ip = WameedPrefs.getPcIp(context)
         val port = WameedPrefs.getPcPort(context)
 
+        Log.i(TAG, "محاولة الاتصال (Ping) بـ $ip:$port")
+
         if (ip.isEmpty()) {
+            Log.w(TAG, "فشل الإرسال: لم يتم تكوين عنوان IP للكمبيوتر")
             callback.onError(context.getString(R.string.error_pc_not_configured))
             return
         }
 
         Thread {
             // أولاً: التحقق السريع من TCP
+            Log.d(TAG, "فحص TCP السريع لـ $ip:$port...")
             if (!isTcpReachable(ip, port, 1500)) {
+                Log.w(TAG, "جهاز $ip غير متاح عبر TCP")
                 callback.onError(context.getString(R.string.status_pc_unavailable))
                 return@Thread
             }
+            Log.d(TAG, "اتصال TCP ناجح، جاري فتح WebSocket...")
 
             // ثانياً: فتح WebSocket والانتظار حتى paired
             val wsUrl = WameedPrefs.getWsUrl(context)
@@ -103,6 +109,7 @@ class WameedSender(private val context: Context) {
                         val idle = System.currentTimeMillis() - lastProgressMs.get()
                         if (idle > pairingTimeoutMs) {
                             if (finishedFlag.compareAndSet(false, true)) {
+                                Log.e(TAG, "انتهت مهلة الاقتران (Timeout) لـ $ip")
                                 callback.onError(context.getString(R.string.error_pairing_timeout))
                             }
                             break
@@ -114,6 +121,7 @@ class WameedSender(private val context: Context) {
 
             client.newWebSocket(request, object : WebSocketListener() {
                 override fun onOpen(webSocket: WebSocket, response: Response) {
+                    Log.i(TAG, "تم فتح WebSocket لـ $ip، إرسال تحية 'hello'...")
                     lastProgressMs.set(System.currentTimeMillis())
                     val hello = JSONObject().apply {
                         put("type", "hello")
@@ -125,6 +133,7 @@ class WameedSender(private val context: Context) {
                 }
 
                 override fun onMessage(webSocket: WebSocket, text: String) {
+                    Log.v(TAG, "استلام رسالة من $ip: $text")
                     lastProgressMs.set(System.currentTimeMillis())
                     if (finishedFlag.get()) return
 
@@ -132,11 +141,11 @@ class WameedSender(private val context: Context) {
                         val resp = JSONObject(text)
                         when (resp.optString("status")) {
                             "pairing_required" -> {
-                                // الاقتران معلق - إعلام المستخدم بالانتظار
+                                Log.i(TAG, "الكمبيوتر يطلب الاقتران (Pairing Required)")
                                 callback.onInfo(context.getString(R.string.status_waiting_for_approval))
                             }
                             "paired", "hello" -> {
-                                // الاقتران ناجح!
+                                Log.i(TAG, "✅ تم الاتصال بنجاح مع $ip")
                                 if (finishedFlag.compareAndSet(false, true)) {
                                     markSendSuccess()
                                     callback.onSuccess(context.getString(R.string.status_connected))
@@ -144,7 +153,7 @@ class WameedSender(private val context: Context) {
                                 }
                             }
                             "rejected" -> {
-                                // الاقتران مرفوض
+                                Log.w(TAG, "❌ الكمبيوتر رفض الاتصال")
                                 if (finishedFlag.compareAndSet(false, true)) {
                                     val msg = resp.optString("message",
                                         context.getString(R.string.error_pairing_rejected))
@@ -190,8 +199,13 @@ class WameedSender(private val context: Context) {
      */
     fun sendFiles(uris: List<Uri>, callback: SendCallback) {
         if (uris.isEmpty()) return
+        val ip = WameedPrefs.getPcIp(context)
         val wsUrl = WameedPrefs.getWsUrl(context)
-        if (wsUrl.contains("://:7788")) {
+        
+        Log.i(TAG, "بدء إرسال ${uris.size} ملفات إلى $ip")
+
+        if (ip.isEmpty()) {
+            Log.w(TAG, "فشل الإرسال: لم يتم تكوين الكمبيوتر")
             callback.onError(context.getString(R.string.error_pc_not_configured))
             return
         }
@@ -209,7 +223,7 @@ class WameedSender(private val context: Context) {
                         val idle = System.currentTimeMillis() - lastProgressMs.get()
                         if (idle > 120_000L) {
                             if (finishedFlag.compareAndSet(false, true)) {
-                                Log.w(TAG, "Global batch watchdog fired")
+                                Log.e(TAG, "Global batch watchdog fired - no response for 2 minutes")
                                 callback.onError(context.getString(R.string.error_timeout_pc_no_response))
                                 currentWebSocket?.close(1000, null)
                             }
@@ -222,9 +236,11 @@ class WameedSender(private val context: Context) {
 
             fun bumpWatchdog() = lastProgressMs.set(System.currentTimeMillis())
 
+            Log.d(TAG, "فتح WebSocket للإرسال المتعدد: $wsUrl")
             val request = Request.Builder().url(wsUrl).build()
             currentWebSocket = client.newWebSocket(request, object : WebSocketListener() {
                 override fun onOpen(webSocket: WebSocket, response: Response) {
+                    Log.d(TAG, "WebSocket مفتوح، إرسال التحية...")
                     bumpWatchdog()
                     val hello = JSONObject().apply {
                         put("type", "hello")
@@ -236,6 +252,7 @@ class WameedSender(private val context: Context) {
                 }
 
                 override fun onMessage(webSocket: WebSocket, text: String) {
+                    Log.v(TAG, "استلام من الكمبيوتر: $text")
                     bumpWatchdog()
                     try {
                         val resp = JSONObject(text)
@@ -244,6 +261,7 @@ class WameedSender(private val context: Context) {
                 }
 
                 override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                    Log.e(TAG, "خطأ في WebSocket للإرسال: ${t.message}", t)
                     if (finishedFlag.compareAndSet(false, true)) {
                         val msg = when {
                             t is java.net.ConnectException -> context.getString(R.string.error_connect_failed)
@@ -259,23 +277,35 @@ class WameedSender(private val context: Context) {
             try {
                 // Phase 1: Handshake/Pairing (once per session)
                 var paired = false
+                Log.d(TAG, "انتظار حالة الاقتران...")
                 while (!finishedFlag.get() && !paired) {
                     val resp = responseQueue.poll(60, TimeUnit.SECONDS) ?: break
                     when (resp.optString("status")) {
-                        "pairing_required" -> callback.onInfo(context.getString(R.string.info_pairing_approval))
-                        "paired", "hello" -> paired = true
+                        "pairing_required" -> {
+                            Log.i(TAG, "حالة: انتظار موافقة الاقتران على الكمبيوتر")
+                            callback.onInfo(context.getString(R.string.info_pairing_approval))
+                        }
+                        "paired", "hello" -> {
+                            Log.i(TAG, "تم الاقتران بنجاح، البدء في إرسال الملفات")
+                            paired = true
+                        }
                         "rejected" -> {
+                            Log.w(TAG, "تم رفض طلب الاقتران من الكمبيوتر")
                             if (finishedFlag.compareAndSet(false, true)) {
                                 callback.onError(resp.optString("message", context.getString(R.string.error_pairing_rejected)))
                                 currentWebSocket.close(1000, null)
                             }
                             return@Thread
                         }
-                        "ws_failure" -> return@Thread
+                        "ws_failure" -> {
+                            Log.e(TAG, "فشل الاتصال أثناء انتظار الاقتران")
+                            return@Thread
+                        }
                     }
                 }
                 
                 if (!paired) {
+                    Log.e(TAG, "فشل الاتصال: لم يكتمل الاقتران")
                     if (finishedFlag.compareAndSet(false, true)) {
                         callback.onError(context.getString(R.string.error_timeout_pc_no_response))
                         currentWebSocket.close(1000, null)
@@ -287,24 +317,26 @@ class WameedSender(private val context: Context) {
                 for ((index, uri) in uris.withIndex()) {
                     if (finishedFlag.get()) break
                     
-                    // تحديث فوري للواجهة لتعزيز شعور "الوميض" (السرعة)
                     callback.onProgress(0, 0.0)
 
                     val mimeType = context.contentResolver.getType(uri) ?: "application/octet-stream"
                     val filename = getFilename(uri, mimeType)
+                    Log.i(TAG, "جاري تحضير ملف [${index+1}/${uris.size}]: $filename ($mimeType)")
                     callback.onNextFile(index + 1, uris.size, filename)
 
                     var fileSize = resolveSize(uri)
                     var tempFile: java.io.File? = null
                     
                     if (fileSize <= 0) {
+                        Log.d(TAG, "حجم الملف غير معروف، جاري النسخ للمخزن المؤقت للقياس...")
                         callback.onInfo(context.getString(R.string.preparing))
                         try {
                             tempFile = java.io.File.createTempFile("wameed_", ".bin", context.cacheDir)
-                            val MAX = 300L * 1024 * 1024
+                            // Increase fallback limit to 4GB for rare cases where size is unknown
+                            val MAX = 4L * 1024 * 1024 * 1024 
                             context.contentResolver.openInputStream(uri)?.use { ins ->
                                 java.io.FileOutputStream(tempFile).use { out ->
-                                    val buf = ByteArray(256 * 1024) // حجم أكبر لنسخ أسرع
+                                    val buf = ByteArray(512 * 1024)
                                     var total = 0L
                                     var n: Int
                                     while (ins.read(buf).also { n = it } > 0) {
@@ -312,11 +344,17 @@ class WameedSender(private val context: Context) {
                                         if (total > MAX) throw IOException(context.getString(R.string.error_file_too_large))
                                         out.write(buf, 0, n)
                                         bumpWatchdog()
+                                        // Optional: update UI that we are still preparing
+                                        if (total % (50 * 1024 * 1024) == 0L) {
+                                            Log.d(TAG, "Preparing large file: ${total / (1024*1024)}MB copied to cache")
+                                        }
                                     }
                                     fileSize = total
                                 }
                             }
+                            Log.d(TAG, "تم نسخ الملف للمخزن المؤقت، الحجم: $fileSize بايت")
                         } catch (e: Exception) {
+                            Log.e(TAG, "فشل قراءة الملف: ${e.message}")
                             callback.onError(context.getString(R.string.error_read_failed, e.message ?: ""))
                             finishedFlag.set(true)
                             break
@@ -324,6 +362,7 @@ class WameedSender(private val context: Context) {
                     }
 
                     if (fileSize <= 0) {
+                        Log.e(TAG, "خطأ: حجم الملف $filename لا يزال غير معروف")
                         callback.onError(context.getString(R.string.error_unknown_size))
                         finishedFlag.set(true)
                         break
@@ -333,6 +372,7 @@ class WameedSender(private val context: Context) {
                     val totalChunks = ((fileSize + chunkSize - 1) / chunkSize).toInt()
 
                     // Send metadata
+                    Log.d(TAG, "إرسال البيانات الوصفية للملف: $filename (Chunks: $totalChunks)")
                     val meta = JSONObject().apply {
                         put("type", "file_meta")
                         put("filename", filename)
@@ -354,16 +394,15 @@ class WameedSender(private val context: Context) {
                             var chunkIdx = 0
                             var n: Int
                             var totalBytesSent = 0L
+                            var lastLogTime = System.currentTimeMillis()
                             var lastCalcTime = System.currentTimeMillis()
                             var lastCalcBytes = 0L
 
                             while (stream.read(buffer).also { n = it } > 0) {
                                 if (finishedFlag.get()) break
                                 
-                                // Flow control: throttle if OS buffer is full
-                                // زيادة سعة المخزن المؤقت لضمان تدفق مستمر كالبرق
                                 while (currentWebSocket!!.queueSize() > 16 * 1024 * 1024) {
-                                    Thread.sleep(1) // تقليل وقت الانتظار لزيادة الاستجابة
+                                    Thread.sleep(1)
                                     bumpWatchdog()
                                 }
 
@@ -376,11 +415,15 @@ class WameedSender(private val context: Context) {
                                 chunkIdx++
 
                                 val now = System.currentTimeMillis()
-                                if (now - lastCalcTime >= 100) { // تحديث كل 100 ملي ثانية بدلاً من 500 لزيادة النعومة
+                                if (now - lastLogTime >= 2000) {
+                                    Log.v(TAG, "جاري إرسال $filename: ${(totalBytesSent*100/fileSize)}%")
+                                    lastLogTime = now
+                                }
+
+                                if (now - lastCalcTime >= 100) {
                                     val deltaSec = (now - lastCalcTime) / 1000.0
                                     val deltaBytes = totalBytesSent - lastCalcBytes
                                     val speedMbps = (deltaBytes * 8.0) / (1024.0 * 1024.0 * deltaSec)
-                                    // نصل إلى 98% بحد أقصى أثناء الإرسال الفعلي
                                     val progress = 5 + (chunkIdx * 93 / totalChunks) 
                                     callback.onProgress(progress, speedMbps)
                                     lastCalcTime = now
@@ -388,8 +431,10 @@ class WameedSender(private val context: Context) {
                                 }
                                 bumpWatchdog()
                             }
+                            Log.i(TAG, "انتهى إرسال بيانات الملف $filename، بانتظار تأكيد الحفظ...")
                         }
                     } catch (e: Exception) {
+                        Log.e(TAG, "فشل أثناء إرسال بيانات الملف: ${e.message}")
                         callback.onError(context.getString(R.string.error_send_failed, e.message ?: ""))
                         finishedFlag.set(true)
                     } finally {
@@ -398,20 +443,19 @@ class WameedSender(private val context: Context) {
 
                     if (finishedFlag.get()) break
 
-                    // ننتظر الرد من الكمبيوتر. نقوم بعمل poll قصير أولاً قبل إظهار حالة "جاري الحفظ"
-                    // لتجنب رعشة الواجهة (Flicker) في الملفات السريعة.
+                    // Wait for ACK
                     val fileWatchdogMs = maxOf(30_000L, fileSize / (256L * 1024) * 1000L + 30_000L)
                     var ackReceived = false
                     val ackStart = System.currentTimeMillis()
                     
                     var firstPoll = true
                     while (System.currentTimeMillis() - ackStart < fileWatchdogMs) {
-                        // في أول محاولة، ننتظر 150ms فقط، إذا وصل الرد نتجاوز رسالة "جاري الحفظ"
                         val pollTimeout = if (firstPoll) 150L else 50L
                         val resp = responseQueue.poll(pollTimeout, TimeUnit.MILLISECONDS)
                         
                         if (resp == null) {
                             if (firstPoll && !finishedFlag.get()) {
+                                Log.d(TAG, "بانتظار تأكيد الحفظ من الكمبيوتر (Saving...)")
                                 callback.onInfo(context.getString(R.string.status_saving_on_pc))
                                 firstPoll = false
                             }
@@ -420,14 +464,21 @@ class WameedSender(private val context: Context) {
 
                         val status = resp.optString("status")
                         if (status == "saved") {
+                            Log.i(TAG, "✅ تأكيد الحفظ: $filename")
                             ackReceived = true
-                            callback.onProgress(100) // اكتمال حقيقي عند الحفظ
+                            callback.onProgress(100)
                             break
+                        } else if (status == "saving") {
+                            Log.d(TAG, "الطرف الآخر يقوم بحفظ الملف حالياً...")
+                            callback.onInfo(context.getString(R.string.status_saving_on_pc))
+                            bumpWatchdog() // Reset watchdog because we know it's working
                         } else if (status == "error") {
+                            Log.e(TAG, "❌ فشل حفظ الملف على الكمبيوتر: ${resp.optString("message")}")
                             callback.onError(resp.optString("message", context.getString(R.string.error_save_failed)))
                             finishedFlag.set(true)
                             break
                         } else if (status == "ws_failure") {
+                            Log.e(TAG, "فصل الاتصال أثناء انتظار تأكيد الحفظ")
                             finishedFlag.set(true)
                             break
                         }
@@ -435,6 +486,7 @@ class WameedSender(private val context: Context) {
                     }
 
                     if (!ackReceived && !finishedFlag.get()) {
+                        Log.e(TAG, "فشل: انتهت مهلة تأكيد الحفظ للملف $filename")
                         callback.onError(context.getString(R.string.error_timeout_pc_no_response))
                         finishedFlag.set(true)
                         break
@@ -442,11 +494,13 @@ class WameedSender(private val context: Context) {
                 }
 
                 if (!finishedFlag.get()) {
+                    Log.i(TAG, "✨ اكتملت العملية بنجاح!")
                     markSendSuccess()
                     callback.onSuccess(context.getString(R.string.status_saved))
                 }
 
             } catch (e: Exception) {
+                Log.e(TAG, "❌ خطأ غير متوقع في Batch Sender", e)
                 if (finishedFlag.compareAndSet(false, true)) {
                     callback.onError(context.getString(R.string.error_general, e.message ?: ""))
                 }
@@ -490,6 +544,9 @@ class WameedSender(private val context: Context) {
                         if (needsPairing && payloadSent.compareAndSet(false, true)) {
                             webSocket.send(payload)
                         }
+                    }
+                    "saving" -> {
+                        // Reset possible internal watchdog if we had one for single sends
                     }
                     "rejected" -> {
                         if (finishedFlag.compareAndSet(false, true)) {

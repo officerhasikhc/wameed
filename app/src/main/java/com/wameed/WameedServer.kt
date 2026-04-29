@@ -30,6 +30,7 @@ class WameedServer(private val context: Context) {
     }
 
     interface ServerCallback {
+        fun onDeviceConnected(name: String, ip: String)
         fun onFileTransferStarted(filename: String, size: Long)
         fun onProgress(percent: Int, speedMbps: Double)
         fun onTransferCompleted(file: File, filename: String)
@@ -153,6 +154,13 @@ class WameedServer(private val context: Context) {
 
                                 if (WameedPrefs.isDeviceTrusted(context, deviceId) || (savedIp.isNotEmpty() && remoteIp == savedIp)) {
                                     Log.i(TAG, "Auto-approving trusted device: $deviceName ($deviceId)")
+                                    
+                                    // إذا كان الجهاز موثوقاً أو هو الكمبيوتر المحفوظ، نتأكد من حفظ عنوانه الحالي
+                                    // هذا يضمن تحديث الـ IP إذا تغير (DHCP) دون تدخل يدوي.
+                                    WameedPrefs.savePcAddress(context, remoteIp)
+                                    WameedPrefs.setPcName(context, deviceName)
+                                    callback?.onDeviceConnected(deviceName, remoteIp)
+
                                     if (remoteIp == savedIp && deviceId.isNotEmpty()) {
                                         WameedPrefs.addTrustedDevice(context, deviceId)
                                     }
@@ -239,6 +247,14 @@ class WameedServer(private val context: Context) {
                                 fileOutput?.close()
                             }
                             fileOutput = null
+
+                            // أرسل حالة "saving" قبل بدء عمليات MediaStore المكلفة لتجنب timeout في طرف المرسل
+                            try {
+                                session.send(Frame.Text(buildJsonObject {
+                                    put("status", "saving")
+                                }.toString()))
+                            } catch (_: Exception) {}
+
                             val finalFilename = currentFile?.name?.removePrefix("wameed_receive_") ?: "received_file"
                             currentFile?.let { callback?.onTransferCompleted(it, finalFilename) }
 

@@ -274,10 +274,18 @@ class ReceiveActivity : AppCompatActivity() {
                     action = WameedConnectionService.ACTION_APPROVE_PAIRING
                 }
                 startService(intent)
-                iconView.text = "⌛"
-                statusText.text = getString(R.string.waiting_for_file)
+                
+                // Simplified "Connected" state
+                iconView.text = "✅"
+                statusText.text = getString(R.string.status_connected_to).replace("{name}", deviceName)
+                statusText.setTextColor("#2E7D32".toColorInt())
                 detailText.text = ""
                 buttonsLayout.removeAllViews()
+                
+                // Auto-close after 3 seconds for pairing approval
+                autoCloseRunnable?.let { handler.removeCallbacks(it) }
+                countdownTextView?.visibility = View.VISIBLE
+                startCountdown(3)
             }
         }
 
@@ -386,10 +394,18 @@ class ReceiveActivity : AppCompatActivity() {
             }
             val closeBtn = Button(this).apply {
                 text = getString(R.string.close)
-                setOnClickListener { finish() }
+                setOnClickListener {
+                    autoCloseRunnable?.let { handler.removeCallbacks(it) }
+                    finish()
+                }
             }
             buttonsLayout.addView(copyBtn)
             buttonsLayout.addView(closeBtn)
+
+            // الإغلاق التلقائي للنصوص بعد 30 ثانية
+            autoCloseRunnable?.let { handler.removeCallbacks(it) }
+            countdownTextView?.visibility = View.VISIBLE
+            startCountdown(30)
         }
     }
 
@@ -437,11 +453,19 @@ class ReceiveActivity : AppCompatActivity() {
             }
             val closeBtn = Button(this).apply {
                 text = getString(R.string.close)
-                setOnClickListener { finish() }
+                setOnClickListener {
+                    autoCloseRunnable?.let { handler.removeCallbacks(it) }
+                    finish()
+                }
             }
             buttonsLayout.addView(openBtn)
             buttonsLayout.addView(copyBtn)
             buttonsLayout.addView(closeBtn)
+
+            // الإغلاق التلقائي للروابط بعد 30 ثانية
+            autoCloseRunnable?.let { handler.removeCallbacks(it) }
+            countdownTextView?.visibility = View.VISIBLE
+            startCountdown(30)
         }
     }
 
@@ -457,7 +481,7 @@ class ReceiveActivity : AppCompatActivity() {
                 if (iconView.text == "") return@runOnUiThread
 
                 iconView.text = ""
-                statusText.setTextColor("#1B5E20".toColorInt())
+                statusText.setTextColor(Color.parseColor("#1B5E20"))
                 progressBar.visibility = View.GONE
                 buttonsLayout.removeAllViews()
                 vibrateSuccess()
@@ -536,10 +560,18 @@ class ReceiveActivity : AppCompatActivity() {
             if (buttonsLayout.isEmpty()) {
                 val closeBtn = Button(this).apply {
                     text = getString(R.string.close)
-                    setOnClickListener { finish() }
+                    setOnClickListener {
+                        autoCloseRunnable?.let { handler.removeCallbacks(it) }
+                        finish()
+                    }
                 }
                 buttonsLayout.addView(closeBtn)
             }
+            
+            // Auto-close after 5 seconds on error
+            autoCloseRunnable?.let { handler.removeCallbacks(it) }
+            countdownTextView?.visibility = View.VISIBLE
+            startCountdown(5)
         }
     }
 

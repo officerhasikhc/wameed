@@ -23,8 +23,8 @@ android {
         applicationId = "com.wameed"
         minSdk = 26
         targetSdk = 36
-        versionCode = 5
-        versionName = "1.4.0"
+        versionCode = 6
+        versionName = "1.6.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -89,6 +89,9 @@ dependencies {
     implementation(libs.ktor.server.websockets)
     implementation(libs.ktor.server.content.negotiation)
     implementation(libs.ktor.serialization.kotlinx.json)
+
+    // Google Fonts for Compose — Cairo Arabic font
+    implementation("androidx.compose.ui:ui-text-google-fonts:1.7.5")
 
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.ui)

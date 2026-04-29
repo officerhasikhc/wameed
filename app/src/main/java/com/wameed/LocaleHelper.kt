@@ -22,7 +22,7 @@ object LocaleHelper {
      * and returns a new context with the updated configuration.
      */
     fun applyLocale(context: Context, lang: String): Context {
-        val locale = Locale(lang)
+        val locale = Locale.forLanguageTag(lang)
         Locale.setDefault(locale)
 
         val config = Configuration(context.resources.configuration)
