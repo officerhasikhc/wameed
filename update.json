@@ -2,7 +2,7 @@
   "android": {
     "versionCode": 5,
     "versionName": "1.4.0",
-    "updateUrl": "hhttps://github.com/officerhasikhc/wameed/releases/download/1.4.0/Wameed-Android.apk",
+    "updateUrl": "https://github.com/officerhasikhc/wameed/releases/download/1.4.0/Wameed-Android.apk",
     "isForceUpdate": false,
     "releaseNotes": "تحديث جديد يتضمن ميزات النقل السريع وإصلاحات الأخطاء."
   },
