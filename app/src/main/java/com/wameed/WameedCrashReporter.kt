@@ -2,7 +2,9 @@ package com.wameed
 
 import android.content.Context
 import android.os.Build
+import android.util.Log
 import com.google.firebase.Firebase
+import com.google.firebase.analytics.analytics
 import com.google.firebase.crashlytics.crashlytics
 import com.wameed.BuildConfig
 
@@ -31,10 +33,16 @@ class WameedCrashReporter private constructor() {
             val instance = getInstance()
             instance.setDeviceInfo(context)
             
-            // في وضع التصحيح، لا نرسل التقارير
-            if (BuildConfig.DEBUG) {
-                instance.crashlytics.setCrashlyticsCollectionEnabled(false)
-            }
+            // تفعيل Crashlytics دائماً (debug + release)
+            instance.crashlytics.setCrashlyticsCollectionEnabled(true)
+            
+            // إرسال أي تقارير معلقة
+            instance.crashlytics.sendUnsentReports()
+            
+            // تسجيل حدث بدء التطبيق في Analytics
+            Firebase.analytics.logEvent("app_initialized", null)
+            
+            Log.d("WameedCrashReporter", "Crashlytics initialized - collection enabled")
         }
     }
     
@@ -90,5 +98,14 @@ class WameedCrashReporter private constructor() {
             setCustomKey("user_email", email)
         }
         log("User reported issue: $description")
+        
+        // إرسال Exception فعلي حتى يظهر في Firebase Console
+        crashlytics.recordException(Exception("User Report: $description"))
+        
+        // تسجيل الحدث في Analytics أيضاً
+        Firebase.analytics.logEvent("user_bug_report", android.os.Bundle().apply {
+            putString("description", description.take(100))
+            putString("email", email)
+        })
     }
 }

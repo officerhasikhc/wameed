@@ -6,6 +6,7 @@ plugins {
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.google.services)
     alias(libs.plugins.crashlytics)
+    // alias(libs.plugins.firebase.perf)
 }
 
 // Load keystore properties from local file
@@ -77,6 +78,7 @@ dependencies {
     implementation(platform(libs.firebase.bom))
     implementation("com.google.firebase:firebase-crashlytics")
     implementation("com.google.firebase:firebase-analytics")
+    implementation("com.google.firebase:firebase-perf")
     
     // Google Play In-App Update
     implementation("com.google.android.play:app-update:2.1.0")

@@ -110,6 +110,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.wameed.ui.theme.WameedTheme
 import com.wameed.BuildConfig
+import com.google.firebase.Firebase
+import com.google.firebase.crashlytics.crashlytics
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -1274,34 +1276,34 @@ fun SettingsTab(modifier: Modifier, updateManager: WameedUpdateManager, onShowTr
 
         Spacer(Modifier.height(16.dp))
 
-        // Test Crash button (only in debug mode)
-        if (BuildConfig.DEBUG) {
-            Surface(Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp),
-                color = Color(0xFFFF5252).copy(alpha = 0.1f), shadowElevation = 1.dp) {
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .clickable {
-                            // Test crash for Firebase Crashlytics
-                            Log.d("FirebaseTest", "About to trigger test crash for Crashlytics")
-                            Log.d("FirebaseTest", "Firebase App initialized: ${com.google.firebase.FirebaseApp.getInstance().name}")
-                            throw RuntimeException("Test Crash - Firebase Crashlytics Testing")
-                        }
-                        .padding(18.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column(Modifier.weight(1f)) {
-                        Text("اختبار العطل",
-                            fontWeight = FontWeight.Bold, fontSize = 15.sp, color = Color(0xFFFF5252))
-                        Spacer(Modifier.height(4.dp))
-                        Text("اضغط هنا لاختبار Firebase Crashlytics",
-                            fontSize = 12.sp, color = Color(0xFFFF5252).copy(alpha = 0.7f))
+        // Test Crash button
+        Surface(Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp),
+            color = Color(0xFFFF5252).copy(alpha = 0.1f), shadowElevation = 1.dp) {
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .clickable {
+                        // Test crash for Firebase Crashlytics
+                        Log.d("FirebaseTest", "About to trigger test crash for Crashlytics")
+                        val testException = RuntimeException("Test Crash - Firebase Crashlytics Testing")
+                        Firebase.crashlytics.recordException(testException)
+                        Firebase.crashlytics.log("Test crash triggered by user")
+                        android.widget.Toast.makeText(context, "تم إرسال اختبار العطل إلى Firebase", android.widget.Toast.LENGTH_SHORT).show()
                     }
-                    Icon(Icons.Default.Warning, null, tint = Color(0xFFFF5252))
+                    .padding(18.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text("اختبار العطل",
+                        fontWeight = FontWeight.Bold, fontSize = 15.sp, color = Color(0xFFFF5252))
+                    Spacer(Modifier.height(4.dp))
+                    Text("اضغط هنا لاختبار Firebase Crashlytics",
+                        fontSize = 12.sp, color = Color(0xFFFF5252).copy(alpha = 0.7f))
                 }
+                Icon(Icons.Default.Warning, null, tint = Color(0xFFFF5252))
             }
-            Spacer(Modifier.height(16.dp))
         }
+        Spacer(Modifier.height(16.dp))
 
         // Bug Report button
         Surface(Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp),
