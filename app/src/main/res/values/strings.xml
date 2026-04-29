@@ -57,9 +57,10 @@
     <string name="settings_title">الإعدادات</string>
     <string name="pc_display_mode">وضع العرض على الكمبيوتر</string>
     <string name="pc_display_mode_detail">كيف يتم التعامل مع الملف عند استلامه</string>
-    <string name="mode_open">فتح الملف فوراً بالتطبيق المناسب</string>
-    <string name="mode_path">عرض إشعار بمسار الملف فقط</string>
-    <string name="mode_both">فتح الملف + عرض إشعار المسار</string>
+    <string name="mode_open">فتح الملف فوراً</string>
+    <string name="mode_path">فتح المجلد المحتوي</string>
+    <string name="mode_both">فتح الملف والمجلد معاً</string>
+    <string name="mode_none">تنبيه فقط (بدون فتح)</string>
     <string name="keep_alive_title">إبقاء الاتصال نشطاً عند الخروج</string>
     <string name="keep_alive_detail">يبقى الاتصال بالكمبيوتر مفتوحاً لـ 5 دقائق عند الانتقال لتطبيق آخر (واتساب، مكالمة&#8230;)</string>
     <string name="connection_info">معلومات الاتصال</string>
@@ -85,6 +86,7 @@
     <string name="info_pairing_approval">⏳ افتح وميض على الكمبيوتر ووافق على الاقتران</string>
     <string name="error_pairing_rejected">رُفض الاقتران من الكمبيوتر</string>
     <string name="status_saved">تم الحفظ</string>
+    <string name="status_saving_on_pc">جارٍ الحفظ على الكمبيوتر&#8230;</string>
     <string name="error_save_failed">فشل الحفظ على الكمبيوتر</string>
     <string name="status_sent">تم الإرسال</string>
     <string name="error_connect_failed">تعذر الاتصال بالكمبيوتر. تأكد أن برنامج وميض يعمل على الكمبيوتر.</string>
@@ -184,4 +186,14 @@
     <string name="check_for_updates">البحث عن تحديثات</string>
     <string name="checking_updates">جاري البحث عن تحديثات...</string>
     <string name="app_up_to_date">أحدث إصدار مثبت ✓</string>
+
+    <!-- رسائل حالة الاقتران الجديدة -->
+    <string name="status_waiting_for_approval">⏳ في انتظار موافقة الاقتران على الكمبيوتر&#8230;</string>
+    <string name="status_pairing_pending">في انتظار الاقتران</string>
+    <string name="status_pairing_rejected">تم رفض الاقتران</string>
+    <string name="error_pairing_timeout">انتهت مهلة الاقتران — لم يتم الرد من الكمبيوتر</string>
+    <string name="pairing_approval_hint">افتح نافذة وميض على الكمبيوتر واضغط "Yes" للسماح بالاتصال</string>
+    <string name="error_too_many_files">لا يمكن اختيار أكثر من 10 ملفات</string>
+    <string name="attached_files">الملفات المرفقة (%d)</string>
+    <string name="send_all">إرسال الكل</string>
 </resources>

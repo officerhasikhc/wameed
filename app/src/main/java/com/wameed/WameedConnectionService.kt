@@ -261,10 +261,18 @@ class WameedConnectionService : Service() {
         }
 
         try {
-            startForeground(
-                NOTIF_ID,
-                buildNotification(title, text)
-            )
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                startForeground(
+                    NOTIF_ID,
+                    buildNotification(title, text),
+                    android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+                )
+            } else {
+                startForeground(
+                    NOTIF_ID,
+                    buildNotification(title, text)
+                )
+            }
         } catch (e: Exception) {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && e is ForegroundServiceStartNotAllowedException) {
                 Log.w(TAG, "Foreground service not allowed, using regular notification", e)
@@ -322,7 +330,7 @@ class WameedConnectionService : Service() {
                     put("device", deviceName)
                     put("name", deviceName) // redundant but safer for some PC versions
                     put("device_id", WameedPrefs.getOrCreateDeviceId(this@WameedConnectionService))
-                    put("app_version", "1.1.0")
+                    put("app_version", BuildConfig.VERSION_NAME)
                 }
                 webSocket.send(hello.toString())
                 pingFailures = 0

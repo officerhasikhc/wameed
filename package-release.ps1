@@ -12,7 +12,7 @@ Set-Location $root
 
 # Single source of truth for release version. Must match `AppVersion` in
 # windows-receiver\installer\wameed.iss — if you bump one, bump the other.
-$version = "1.3.0"
+$version = "1.4.0"
 
 Write-Host ""
 Write-Host "┌─────────────────────────────────────────────────┐" -ForegroundColor Cyan

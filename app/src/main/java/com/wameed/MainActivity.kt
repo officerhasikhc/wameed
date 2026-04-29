@@ -39,6 +39,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Home
@@ -58,6 +59,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
@@ -71,6 +73,7 @@ import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.material.icons.filled.Update
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.runtime.Composable
@@ -98,6 +101,9 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import kotlinx.coroutines.launch
 import androidx.compose.ui.res.stringResource
+import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.snapshots.SnapshotStateList
+import kotlinx.coroutines.CompletableDeferred
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -161,7 +167,7 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-enum class ConnectionState { Idle, Checking, Searching, Connecting, Connected, Failed }
+enum class ConnectionState { Idle, Checking, Searching, Connecting, PairingPending, Connected, Failed, Rejected }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -177,33 +183,85 @@ fun MainScreen(sender: WameedSender, discovery: DeviceDiscovery, updateManager: 
 
     val mainHandler = remember { Handler(Looper.getMainLooper()) }
     
+    // Batch sending state
+    var isSendingBatch by remember { mutableStateOf(false) }
+    var currentFileIndex by remember { mutableIntStateOf(0) }
+    var totalFilesCount by remember { mutableIntStateOf(0) }
+    var currentFileProgress by remember { mutableIntStateOf(0) }
+    var currentFileSpeed by remember { mutableStateOf(0.0) }
+    var currentFileName by remember { mutableStateOf("") }
+    var currentInfoStatus by remember { mutableStateOf("") }
+    
     // Update management logic is handled inside UpdateIntegration
 
+    val selectedUris: SnapshotStateList<Uri> = remember { mutableStateListOf<Uri>() }
+    val scope = rememberCoroutineScope()
+
     val filePicker = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.OpenDocument()
-    ) { uri ->
-        if (uri != null) {
-            Toast.makeText(context, context.getString(R.string.sending), Toast.LENGTH_LONG).show()
-            WameedConnectionService.start(context)
-            sender.sendFile(uri, object : WameedSender.SendCallback {
-                override fun onSuccess(message: String) {
-                    mainHandler.post {
-                        Toast.makeText(context, context.getString(R.string.success_message, message), Toast.LENGTH_LONG).show()
-                    }
-                }
-                override fun onError(error: String) {
-                    mainHandler.post {
-                        Toast.makeText(context, context.getString(R.string.error_prefix, error), Toast.LENGTH_LONG).show()
-                    }
-                }
-                override fun onProgress(percent: Int) {}
-                override fun onInfo(message: String) {
-                    mainHandler.post {
-                        Toast.makeText(context, message, Toast.LENGTH_LONG).show()
-                    }
-                }
-            })
+        contract = ActivityResultContracts.OpenMultipleDocuments()
+    ) { uris ->
+        if (uris.isNotEmpty()) {
+            if (selectedUris.size + uris.size > 10) {
+                Toast.makeText(context, context.getString(R.string.error_too_many_files), Toast.LENGTH_SHORT).show()
+                val remainingCount = (10 - selectedUris.size).coerceAtLeast(0)
+                selectedUris.addAll(uris.take(remainingCount))
+            } else {
+                selectedUris.addAll(uris)
+            }
         }
+    }
+
+    fun sendSelectedFiles() {
+        if (selectedUris.isEmpty()) return
+        
+        val urisCopy = selectedUris.toList()
+        isSendingBatch = true
+        
+        WameedConnectionService.start(context)
+        
+        sender.sendFiles(urisCopy, object : WameedSender.SendCallback {
+            override fun onNextFile(index: Int, total: Int, fileName: String) {
+                currentFileIndex = index
+                totalFilesCount = total
+                currentFileName = fileName
+                currentFileProgress = 0
+                currentFileSpeed = 0.0
+                currentInfoStatus = ""
+            }
+
+            override fun onProgress(percent: Int, speedMbps: Double) {
+                currentFileProgress = percent
+                currentFileSpeed = speedMbps
+                if (percent > 0) currentInfoStatus = "" // إخفاء أي حالة معلومات عند بدء التقدم
+            }
+
+            override fun onProgress(percent: Int) {
+                currentFileProgress = percent
+            }
+
+            override fun onSuccess(message: String) {
+                mainHandler.post {
+                    isSendingBatch = false
+                    selectedUris.clear()
+                    currentInfoStatus = ""
+                    Toast.makeText(context, context.getString(R.string.success_all_sent, urisCopy.size), Toast.LENGTH_SHORT).show()
+                }
+            }
+
+            override fun onError(error: String) {
+                mainHandler.post {
+                    isSendingBatch = false
+                    currentInfoStatus = ""
+                    Toast.makeText(context, context.getString(R.string.error_prefix, error), Toast.LENGTH_LONG).show()
+                }
+            }
+
+            override fun onInfo(message: String) {
+                mainHandler.post {
+                    currentInfoStatus = message
+                }
+            }
+        })
     }
 
     fun connectToDevice(device: DeviceDiscovery.DiscoveredDevice) {
@@ -226,8 +284,23 @@ fun MainScreen(sender: WameedSender, discovery: DeviceDiscovery, updateManager: 
             }
             override fun onError(error: String) {
                 mainHandler.post {
-                    connectionState = ConnectionState.Failed
-                    statusText = context.getString(R.string.connection_failed_to, device.name)
+                    // التحقق إذا كان الخطأ بسبب رفض الاقتران
+                    val isRejected = error.contains("رفض") || error.contains("rejected", ignoreCase = true)
+                    connectionState = if (isRejected) ConnectionState.Rejected else ConnectionState.Failed
+                    statusText = if (isRejected) {
+                        context.getString(R.string.status_pairing_rejected)
+                    } else {
+                        context.getString(R.string.connection_failed_to, device.name)
+                    }
+                }
+            }
+            override fun onInfo(message: String) {
+                mainHandler.post {
+                    // عند انتظار موافقة الاقتران
+                    if (message.contains("انتظار") || message.contains("waiting", ignoreCase = true)) {
+                        connectionState = ConnectionState.PairingPending
+                        statusText = context.getString(R.string.status_waiting_for_approval)
+                    }
                 }
             }
             override fun onProgress(percent: Int) {}
@@ -331,7 +404,6 @@ fun MainScreen(sender: WameedSender, discovery: DeviceDiscovery, updateManager: 
     LaunchedEffect(Unit) { revalidate() }
 
     val lifecycleOwner = LocalLifecycleOwner.current
-    val scope = rememberCoroutineScope()
 
     LaunchedEffect(Unit) {
         WameedEvents.events.collect { event ->
@@ -429,7 +501,11 @@ fun MainScreen(sender: WameedSender, discovery: DeviceDiscovery, updateManager: 
                 onConnect = { connectToDevice(it) },
                 onRefresh = { startDiscovery() },
                 onSend = { filePicker.launch(arrayOf("*/*")) },
-                onManualConnect = { showManualDialog.value = true }
+                onManualConnect = { showManualDialog.value = true },
+                selectedUris = selectedUris,
+                onRemoveUri = { selectedUris.remove(it) },
+                onConfirmSend = { sendSelectedFiles() },
+                isSendingBatch = isSendingBatch
             )
             1 -> HistoryTab(modifier = Modifier.padding(padding))
             2 -> ReceivedTab(modifier = Modifier.padding(padding))
@@ -440,6 +516,19 @@ fun MainScreen(sender: WameedSender, discovery: DeviceDiscovery, updateManager: 
 
     // Update integration
     UpdateIntegration(updateManager, context)
+
+    if (isSendingBatch) {
+        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.BottomCenter) {
+            BatchProgressOverlay(
+                currentFile = currentFileIndex,
+                totalFiles = totalFilesCount,
+                progress = currentFileProgress,
+                speed = currentFileSpeed,
+                fileName = currentFileName,
+                infoStatus = currentInfoStatus
+            )
+        }
+    }
 
     if (showManualDialog.value) {
         AlertDialog(
@@ -484,7 +573,11 @@ fun ConnectionTab(
     onConnect: (DeviceDiscovery.DiscoveredDevice) -> Unit,
     onRefresh: () -> Unit,
     onSend: () -> Unit,
-    onManualConnect: () -> Unit
+    onManualConnect: () -> Unit,
+    selectedUris: List<Uri> = emptyList(),
+    onRemoveUri: (Uri) -> Unit = {},
+    onConfirmSend: () -> Unit = {},
+    isSendingBatch: Boolean = false
 ) {
     val scrollState = rememberScrollState()
 
@@ -498,11 +591,73 @@ fun ConnectionTab(
         StatusCard(connectionState, statusText, selectedDevice)
         Spacer(modifier = Modifier.height(20.dp))
 
+        if (selectedUris.isNotEmpty()) {
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(16.dp),
+                color = Color.White,
+                shadowElevation = 1.dp
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text(
+                        stringResource(R.string.attached_files, selectedUris.size),
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 14.sp,
+                        color = Color.Gray
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    selectedUris.forEach { uri ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text(
+                                uri.path?.split("/")?.last() ?: uri.toString(),
+                                modifier = Modifier.weight(1f),
+                                maxLines = 1,
+                                fontSize = 13.sp
+                            )
+                            IconButton(
+                                onClick = { onRemoveUri(uri) }, 
+                                modifier = Modifier.size(24.dp),
+                                enabled = !isSendingBatch
+                            ) {
+                                Icon(
+                                    Icons.Default.Delete, 
+                                    null, 
+                                    tint = if (isSendingBatch) Color.Gray else Color.Red, 
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            }
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Button(
+                        onClick = onConfirmSend,
+                        modifier = Modifier.fillMaxWidth(),
+                        enabled = connectionState == ConnectionState.Connected && !isSendingBatch,
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF43A047)),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        if (isSendingBatch) {
+                            CircularProgressIndicator(Modifier.size(18.dp), color = Color.White, strokeWidth = 2.dp)
+                        } else {
+                            Icon(Icons.AutoMirrored.Filled.Send, null, Modifier.size(18.dp))
+                        }
+                        Spacer(Modifier.width(8.dp))
+                        Text(if (isSendingBatch) stringResource(R.string.sending) else stringResource(R.string.send_all))
+                    }
+                }
+            }
+            Spacer(modifier = Modifier.height(20.dp))
+        }
+
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            QuickAction(Modifier.weight(1f), stringResource(R.string.quick_action_send), Icons.AutoMirrored.Filled.Send,
-                Color(0xFF43A047), connectionState == ConnectionState.Connected) { onSend() }
+            QuickAction(Modifier.weight(1f), stringResource(R.string.quick_action_send), Icons.Default.Add,
+                Color(0xFF43A047), !isSendingBatch) { onSend() }
             QuickAction(Modifier.weight(1f), stringResource(R.string.quick_action_refresh), Icons.Default.Refresh,
-                Color(0xFF3B82F6), connectionState != ConnectionState.Searching) { onRefresh() }
+                Color(0xFF3B82F6), connectionState != ConnectionState.Searching && !isSendingBatch) { onRefresh() }
         }
 
         Spacer(modifier = Modifier.height(24.dp))
@@ -991,7 +1146,8 @@ fun SettingsTab(modifier: Modifier, updateManager: WameedUpdateManager, onShowTr
                 listOf(
                     "open" to stringResource(R.string.mode_open),
                     "path" to stringResource(R.string.mode_path),
-                    "both" to stringResource(R.string.mode_both)
+                    "both" to stringResource(R.string.mode_both),
+                    "none" to stringResource(R.string.mode_none)
                 ).forEach { (value, label) ->
                     Row(
                         Modifier
@@ -1273,7 +1429,9 @@ fun StatusCard(
     val dotColor = when (state) {
         ConnectionState.Connected -> Color(0xFF22C55E)
         ConnectionState.Failed -> Color(0xFFEF4444)
+        ConnectionState.Rejected -> Color(0xFFDC2626)
         ConnectionState.Connecting -> Color(0xFFFBBF24)
+        ConnectionState.PairingPending -> Color(0xFFF97316)
         ConnectionState.Checking -> Color(0xFF9CA3AF)
         ConnectionState.Searching -> Color(0xFF3B82F6)
         ConnectionState.Idle -> Color(0xFF9CA3AF)
@@ -1282,7 +1440,9 @@ fun StatusCard(
     val bgColor = when (state) {
         ConnectionState.Connected -> Color(0xFFF0FFF4)
         ConnectionState.Failed -> Color(0xFFFFF5F5)
+        ConnectionState.Rejected -> Color(0xFFFEF2F2)
         ConnectionState.Connecting -> Color(0xFFFFFBEB)
+        ConnectionState.PairingPending -> Color(0xFFFFF7ED)
         ConnectionState.Checking -> Color(0xFFF3F4F6)
         ConnectionState.Searching -> Color(0xFFEFF6FF)
         ConnectionState.Idle -> Color.White
@@ -1320,15 +1480,117 @@ fun StatusCard(
                         )
                     }
                     Text(device.address, fontSize = 12.sp, color = Color.Gray)
+                    Icon(
+                        Icons.Default.CheckCircle,
+                        contentDescription = null,
+                        tint = Color(0xFF22C55E),
+                        modifier = Modifier.size(16.dp).padding(top = 4.dp)
+                    )
                 }
             }
             if (state == ConnectionState.Connecting
                 || state == ConnectionState.Searching
-                || state == ConnectionState.Checking) {
+                || state == ConnectionState.Checking
+                || state == ConnectionState.PairingPending) {
                 CircularProgressIndicator(
                     modifier = Modifier.size(20.dp),
                     strokeWidth = 2.dp,
                     color = dotColor
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun BatchProgressOverlay(
+    currentFile: Int,
+    totalFiles: Int,
+    progress: Int,
+    speed: Double,
+    fileName: String,
+    infoStatus: String = ""
+) {
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(16.dp)
+            .padding(bottom = 80.dp), // Height of BottomBar
+        shape = RoundedCornerShape(24.dp), // زوايا أكثر نعومة
+        color = Color.White,
+        shadowElevation = 12.dp // ظل أعمق لبروز البرق
+    ) {
+        Column(modifier = Modifier.padding(20.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column {
+                    Text(
+                        text = stringResource(R.string.sending_progress, currentFile, totalFiles),
+                        fontWeight = FontWeight.ExtraBold,
+                        fontSize = 15.sp,
+                        color = Color(0xFF2E7D32)
+                    )
+                    if (infoStatus.isNotEmpty()) {
+                        Text(
+                            text = infoStatus,
+                            fontSize = 12.sp,
+                            color = Color(0xFFF97316), // لون برتقالي للتنبيهات اللحظية
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+                
+                if (speed > 0 && infoStatus.isEmpty()) {
+                    Surface(
+                        color = Color(0xFFE8F5E9),
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Text(
+                            text = "%.1f Mbps".format(speed),
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                            fontSize = 12.sp,
+                            color = Color(0xFF2E7D32),
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+            }
+            
+            Spacer(modifier = Modifier.height(12.dp))
+            
+            Text(
+                text = fileName,
+                fontSize = 13.sp,
+                maxLines = 1,
+                fontWeight = FontWeight.Medium,
+                color = Color.Gray
+            )
+            
+            Spacer(modifier = Modifier.height(16.dp))
+            
+            Box(contentAlignment = Alignment.CenterEnd) {
+                LinearProgressIndicator(
+                    progress = { progress / 100f },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(10.dp)
+                        .clip(RoundedCornerShape(5.dp)),
+                    color = Color(0xFF43A047),
+                    trackColor = Color(0xFFE8F5E9),
+                    strokeCap = StrokeCap.Round
+                )
+            }
+            
+            if (progress >= 100) {
+                 Text(
+                    text = "✓ تم الإرسال",
+                    modifier = Modifier.align(Alignment.End).padding(top = 4.dp),
+                    fontSize = 11.sp,
+                    color = Color(0xFF43A047),
+                    fontWeight = FontWeight.Bold
                 )
             }
         }

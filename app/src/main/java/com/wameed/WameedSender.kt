@@ -56,6 +56,8 @@ class WameedSender(private val context: Context) {
         /** Optional: called with informational / intermediate status like
          *  "waiting for pairing approval on the PC". Default: no-op. */
         fun onInfo(message: String) {}
+        /** Called when starting to send a new file in a batch. */
+        fun onNextFile(index: Int, total: Int, fileName: String) {}
     }
 
     /** Record a successful send so MainActivity can show "متصل" even without
@@ -69,22 +71,102 @@ class WameedSender(private val context: Context) {
     }
 
     fun sendPing(callback: SendCallback) {
-        // التحقق من أن العنوان متاح عبر TCP فقط دون فتح WebSocket كامل
-        // هذا يمنع ظهور طلب الاقتران مرتين على الكمبيوتر عند الفحص المبدئي
+        // فتح WebSocket حقيقي والانتظار حتى اكتمال الاقتران
+        // هذا يضمن أن الهاتف لا يظهر "متصل" أثناء انتظار موافقة الاقتران
         val ip = WameedPrefs.getPcIp(context)
         val port = WameedPrefs.getPcPort(context)
-        
+
         if (ip.isEmpty()) {
             callback.onError(context.getString(R.string.error_pc_not_configured))
             return
         }
 
         Thread {
-            if (isTcpReachable(ip, port, 1500)) {
-                callback.onSuccess(context.getString(R.string.status_connected))
-            } else {
+            // أولاً: التحقق السريع من TCP
+            if (!isTcpReachable(ip, port, 1500)) {
                 callback.onError(context.getString(R.string.status_pc_unavailable))
+                return@Thread
             }
+
+            // ثانياً: فتح WebSocket والانتظار حتى paired
+            val wsUrl = WameedPrefs.getWsUrl(context)
+            val request = Request.Builder().url(wsUrl).build()
+
+            val finishedFlag = java.util.concurrent.atomic.AtomicBoolean(false)
+            val lastProgressMs = java.util.concurrent.atomic.AtomicLong(System.currentTimeMillis())
+
+            // Watchdog للاقتران: 3 دقائق (نافذة الاقتران قد تكون خلف نوافذ أخرى)
+            val pairingTimeoutMs = 3 * 60_000L
+            val watchdogThread = Thread {
+                try {
+                    while (!finishedFlag.get()) {
+                        val idle = System.currentTimeMillis() - lastProgressMs.get()
+                        if (idle > pairingTimeoutMs) {
+                            if (finishedFlag.compareAndSet(false, true)) {
+                                callback.onError(context.getString(R.string.error_pairing_timeout))
+                            }
+                            break
+                        }
+                        Thread.sleep(1000)
+                    }
+                } catch (_: InterruptedException) { }
+            }.apply { isDaemon = true; start() }
+
+            client.newWebSocket(request, object : WebSocketListener() {
+                override fun onOpen(webSocket: WebSocket, response: Response) {
+                    lastProgressMs.set(System.currentTimeMillis())
+                    val hello = JSONObject().apply {
+                        put("type", "hello")
+                        put("device", WameedPrefs.getDeviceName())
+                        put("device_id", WameedPrefs.getOrCreateDeviceId(context))
+                        put("app_version", BuildConfig.VERSION_NAME)
+                    }
+                    webSocket.send(hello.toString())
+                }
+
+                override fun onMessage(webSocket: WebSocket, text: String) {
+                    lastProgressMs.set(System.currentTimeMillis())
+                    if (finishedFlag.get()) return
+
+                    try {
+                        val resp = JSONObject(text)
+                        when (resp.optString("status")) {
+                            "pairing_required" -> {
+                                // الاقتران معلق - إعلام المستخدم بالانتظار
+                                callback.onInfo(context.getString(R.string.status_waiting_for_approval))
+                            }
+                            "paired", "hello" -> {
+                                // الاقتران ناجح!
+                                if (finishedFlag.compareAndSet(false, true)) {
+                                    markSendSuccess()
+                                    callback.onSuccess(context.getString(R.string.status_connected))
+                                    webSocket.close(1000, null)
+                                }
+                            }
+                            "rejected" -> {
+                                // الاقتران مرفوض
+                                if (finishedFlag.compareAndSet(false, true)) {
+                                    val msg = resp.optString("message",
+                                        context.getString(R.string.error_pairing_rejected))
+                                    callback.onError(msg)
+                                    webSocket.close(1000, null)
+                                }
+                            }
+                        }
+                    } catch (_: Exception) { }
+                }
+
+                override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                    if (finishedFlag.compareAndSet(false, true)) {
+                        val msg = when {
+                            t is java.net.ConnectException -> context.getString(R.string.error_connect_failed)
+                            t is java.net.SocketTimeoutException -> context.getString(R.string.error_socket_timeout)
+                            else -> context.getString(R.string.error_connection_dropped, t.message ?: "")
+                        }
+                        callback.onError(msg)
+                    }
+                }
+            })
         }.start()
     }
 
@@ -99,6 +181,15 @@ class WameedSender(private val context: Context) {
     }
 
     fun sendFile(uri: Uri, callback: SendCallback) {
+        sendFiles(listOf(uri), callback)
+    }
+
+    /**
+     * Sends multiple files over a single persistent WebSocket connection.
+     * Reduces handshake overhead and improves batch performance.
+     */
+    fun sendFiles(uris: List<Uri>, callback: SendCallback) {
+        if (uris.isEmpty()) return
         val wsUrl = WameedPrefs.getWsUrl(context)
         if (wsUrl.contains("://:7788")) {
             callback.onError(context.getString(R.string.error_pc_not_configured))
@@ -106,310 +197,262 @@ class WameedSender(private val context: Context) {
         }
 
         Thread {
-            try {
-                // Immediate visual feedback
-                callback.onProgress(1)
+            val responseQueue = java.util.concurrent.LinkedBlockingQueue<JSONObject>()
+            val finishedFlag = java.util.concurrent.atomic.AtomicBoolean(false)
+            val lastProgressMs = java.util.concurrent.atomic.AtomicLong(System.currentTimeMillis())
+            var currentWebSocket: WebSocket? = null
 
-                val contentResolver = context.contentResolver
-                val mimeType = contentResolver.getType(uri) ?: "application/octet-stream"
-                val filename = getFilename(uri, mimeType)
-
-                // حجم القطعة 256KB: توازن بين السرعة والتحكم في الـ queue.
-                // 1MB chunks على شبكات بطيئة تملأ buffer OkHttp بسرعة وتتسبب في التجميد.
-                val chunkSize = 256 * 1024
-
-                // --- Resolve file size robustly ---
-                // Many PDF providers (Drive, WhatsApp, Telegram, …) return
-                // AssetFileDescriptor.UNKNOWN_LENGTH (-1). Images usually
-                // expose a length so the old code "worked" for them only.
-                // Strategy: OpenableColumns.SIZE → AssetFileDescriptor →
-                // copy to cache file as last resort.
-                var fileSize = resolveSize(uri)
-                var tempFile: java.io.File? = null
-                if (fileSize <= 0) {
-                    // Last resort: stream into a cache file so we can measure it.
-                    // Capped at 300MB to protect memory / disk on low-end devices.
-                    // Show fake-but-believable progress (1–4%) during the probe
-                    // so the user never sees a frozen bar for multi-second PDFs.
-                    callback.onInfo(context.getString(R.string.preparing))
-                    try {
-                        tempFile = java.io.File.createTempFile("wameed_", ".bin", context.cacheDir)
-                        val MAX = 300L * 1024 * 1024
-                        contentResolver.openInputStream(uri)?.use { ins ->
-                            java.io.FileOutputStream(tempFile).use { out ->
-                                val buf = ByteArray(64 * 1024)
-                                var total = 0L
-                                var n: Int
-                                var lastReport = 0L
-                                while (ins.read(buf).also { n = it } > 0) {
-                                    total += n
-                                    if (total > MAX) {
-                                        throw IOException(context.getString(R.string.error_file_too_large))
-                                    }
-                                    out.write(buf, 0, n)
-                                    // Throttle UI updates to ~5/s; cap at 4% so
-                                    // the real send-progress (starts at 5%)
-                                    // remains monotonic.
-                                    val now = System.currentTimeMillis()
-                                    if (now - lastReport > 180) {
-                                        val pct = 1 + ((total * 3) / MAX).toInt().coerceAtMost(3)
-                                        callback.onProgress(pct)
-                                        lastReport = now
-                                    }
-                                }
-                                fileSize = total
+            // Global Watchdog: kills the operation if there is no activity for 2 minutes
+            val watchdogThread = Thread {
+                try {
+                    while (!finishedFlag.get()) {
+                        val idle = System.currentTimeMillis() - lastProgressMs.get()
+                        if (idle > 120_000L) {
+                            if (finishedFlag.compareAndSet(false, true)) {
+                                Log.w(TAG, "Global batch watchdog fired")
+                                callback.onError(context.getString(R.string.error_timeout_pc_no_response))
+                                currentWebSocket?.close(1000, null)
                             }
+                            break
                         }
-                    } catch (e: Exception) {
-                        try { tempFile?.delete() } catch (_: Exception) {}
-                        Log.w(TAG, "cache-copy size probe failed: ${e.message}")
-                        callback.onError(context.getString(R.string.error_read_failed, e.message ?: context.getString(R.string.error_unknown_reason)))
-                        return@Thread
+                        Thread.sleep(5000)
                     }
+                } catch (_: InterruptedException) {}
+            }.apply { isDaemon = true; start() }
+
+            fun bumpWatchdog() = lastProgressMs.set(System.currentTimeMillis())
+
+            val request = Request.Builder().url(wsUrl).build()
+            currentWebSocket = client.newWebSocket(request, object : WebSocketListener() {
+                override fun onOpen(webSocket: WebSocket, response: Response) {
+                    bumpWatchdog()
+                    val hello = JSONObject().apply {
+                        put("type", "hello")
+                        put("device", WameedPrefs.getDeviceName())
+                        put("device_id", WameedPrefs.getOrCreateDeviceId(context))
+                        put("app_version", BuildConfig.VERSION_NAME)
+                    }
+                    webSocket.send(hello.toString())
                 }
 
-                if (fileSize <= 0) {
-                    try { tempFile?.delete() } catch (_: Exception) {}
-                    callback.onError(context.getString(R.string.error_unknown_size))
+                override fun onMessage(webSocket: WebSocket, text: String) {
+                    bumpWatchdog()
+                    try {
+                        val resp = JSONObject(text)
+                        responseQueue.put(resp)
+                    } catch (_: Exception) {}
+                }
+
+                override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                    if (finishedFlag.compareAndSet(false, true)) {
+                        val msg = when {
+                            t is java.net.ConnectException -> context.getString(R.string.error_connect_failed)
+                            t is java.net.SocketTimeoutException -> context.getString(R.string.error_socket_timeout)
+                            else -> context.getString(R.string.error_connection_dropped, t.message ?: "")
+                        }
+                        callback.onError(msg)
+                    }
+                    responseQueue.put(JSONObject().apply { put("status", "ws_failure") })
+                }
+            })
+
+            try {
+                // Phase 1: Handshake/Pairing (once per session)
+                var paired = false
+                while (!finishedFlag.get() && !paired) {
+                    val resp = responseQueue.poll(60, TimeUnit.SECONDS) ?: break
+                    when (resp.optString("status")) {
+                        "pairing_required" -> callback.onInfo(context.getString(R.string.info_pairing_approval))
+                        "paired", "hello" -> paired = true
+                        "rejected" -> {
+                            if (finishedFlag.compareAndSet(false, true)) {
+                                callback.onError(resp.optString("message", context.getString(R.string.error_pairing_rejected)))
+                                currentWebSocket.close(1000, null)
+                            }
+                            return@Thread
+                        }
+                        "ws_failure" -> return@Thread
+                    }
+                }
+                
+                if (!paired) {
+                    if (finishedFlag.compareAndSet(false, true)) {
+                        callback.onError(context.getString(R.string.error_timeout_pc_no_response))
+                        currentWebSocket.close(1000, null)
+                    }
                     return@Thread
                 }
 
-                // Use tempFile as the read source if we created one, otherwise
-                // read directly from the uri. openReadStream() below abstracts this.
-                val readSource: () -> java.io.InputStream? = {
-                    if (tempFile != null) java.io.FileInputStream(tempFile)
-                    else contentResolver.openInputStream(uri)
-                }
+                // Phase 2: Sequential File Transfer
+                for ((index, uri) in uris.withIndex()) {
+                    if (finishedFlag.get()) break
+                    
+                    // تحديث فوري للواجهة لتعزيز شعور "الوميض" (السرعة)
+                    callback.onProgress(0, 0.0)
 
-                val totalChunks = ((fileSize + chunkSize - 1) / chunkSize).toInt()
-                val request = Request.Builder().url(wsUrl).build()
+                    val mimeType = context.contentResolver.getType(uri) ?: "application/octet-stream"
+                    val filename = getFilename(uri, mimeType)
+                    callback.onNextFile(index + 1, uris.size, filename)
 
-                // Two-phase send: wait for `paired` (or legacy `hello`) response
-                // BEFORE streaming file_meta/binary — otherwise a slow pairing
-                // dialog on the PC would overflow the server's message queue.
-                val transferStarted = java.util.concurrent.atomic.AtomicBoolean(false)
-                val finishedFlag = java.util.concurrent.atomic.AtomicBoolean(false)
-                val lastProgressMs = java.util.concurrent.atomic.AtomicLong(
-                    System.currentTimeMillis())
-
-                // Watchdog: guarantees the callback *always* resolves. Without
-                // it, if the PC never replies (e.g. pairing dialog is hidden
-                // behind other windows, or receiver crashed mid-transfer after
-                // file_meta), OkHttp would silently wait `readTimeout` = 10min
-                // and the phone UI looks frozen on "جاري الإرسال".
-                //
-                // DYNAMIC: OkHttp queues chunks to the OS socket buffer almost
-                // instantly, but actual WiFi transmission of a large file takes
-                // much longer. A fixed 25s timeout works for small images but
-                // fires too early for PDFs (38MB+). Scale the window based on
-                // file size assuming a worst-case WiFi speed of ~256 KB/s,
-                // plus a 30s base buffer for handshake/save overhead.
-                val watchdogMs = maxOf(30_000L, fileSize / (256L * 1024) * 1000L + 30_000L)
-                val watchdogThread = Thread {
-                    try {
-                        while (!finishedFlag.get()) {
-                            val idle = System.currentTimeMillis() -
-                                lastProgressMs.get()
-                            if (idle > watchdogMs) break
-                            Thread.sleep((watchdogMs - idle + 500).coerceAtLeast(500))
-                        }
-                        if (finishedFlag.compareAndSet(false, true)) {
-                            Log.w(TAG, "Watchdog fired — no progress for ${watchdogMs}ms")
-                            try { tempFile?.delete() } catch (_: Exception) {}
-                            callback.onError(context.getString(R.string.error_timeout_pc_no_response))
-                        }
-                    } catch (_: InterruptedException) { /* normal exit */ }
-                }.apply { isDaemon = true; start() }
-
-                // Helper: refreshes the watchdog window on each real progress.
-                fun bumpWatchdog() {
-                    lastProgressMs.set(System.currentTimeMillis())
-                }
-
-                fun startTransfer(webSocket: WebSocket) {
-                    if (!transferStarted.compareAndSet(false, true)) return
-                    Thread {
+                    var fileSize = resolveSize(uri)
+                    var tempFile: java.io.File? = null
+                    
+                    if (fileSize <= 0) {
+                        callback.onInfo(context.getString(R.string.preparing))
                         try {
-                            val meta = JSONObject().apply {
-                                put("type", "file_meta")
-                                put("filename", filename)
-                                put("mime", mimeType)
-                                put("size", fileSize)
-                                put("chunks", totalChunks)
-                            }
-                            webSocket.send(meta.toString())
-                            bumpWatchdog()
-                            Log.i(TAG, "file_meta sent: $filename size=$fileSize chunks=$totalChunks")
-
-                            readSource()?.use { inputStream ->
-                                val buffer = ByteArray(chunkSize)
-                                var idx = 0
-                                var n: Int
-                                var totalBytesSent = 0L
-                                val startTime = System.currentTimeMillis()
-                                var lastCalcTime = startTime
-                                var lastCalcBytes = 0L
-
-                                while (inputStream.read(buffer).also { n = it } > 0) {
-                                    // انتظر حتى تفرغ الـ queue دون حد زمني ثابت —
-                                // bumpWatchdog() يمنع الـ watchdog من الإطلاق طالما نحن نتقدم.
-                                    while (webSocket.queueSize() > 4 * 1024 * 1024) {
-                                        Thread.sleep(10)
+                            tempFile = java.io.File.createTempFile("wameed_", ".bin", context.cacheDir)
+                            val MAX = 300L * 1024 * 1024
+                            context.contentResolver.openInputStream(uri)?.use { ins ->
+                                java.io.FileOutputStream(tempFile).use { out ->
+                                    val buf = ByteArray(256 * 1024) // حجم أكبر لنسخ أسرع
+                                    var total = 0L
+                                    var n: Int
+                                    while (ins.read(buf).also { n = it } > 0) {
+                                        total += n
+                                        if (total > MAX) throw IOException(context.getString(R.string.error_file_too_large))
+                                        out.write(buf, 0, n)
                                         bumpWatchdog()
                                     }
-
-                                    val chunkData = buffer.toByteString(0, n)
-                                    var sent = webSocket.send(chunkData)
-                                    
-                                    if (!sent) {
-                                        Log.w(TAG, "Chunk $idx send failed (queue full?), retrying...")
-                                        Thread.sleep(100)
-                                        sent = webSocket.send(chunkData)
-                                    }
-
-                                    if (!sent) {
-                                        throw IOException(context.getString(R.string.error_chunk_send_failed))
-                                    }
-
-                                    idx++
-                                    totalBytesSent += n
-                                    
-                                    // Calculate speed every 500ms
-                                    val now = System.currentTimeMillis()
-                                    if (now - lastCalcTime >= 500) {
-                                        val deltaSec = (now - lastCalcTime) / 1000.0
-                                        val deltaBytes = totalBytesSent - lastCalcBytes
-                                        val speedMbps = (deltaBytes * 8.0) / (1024.0 * 1024.0 * deltaSec)
-                                        
-                                        callback.onProgress(5 + (idx * 90 / totalChunks), speedMbps)
-                                        
-                                        lastCalcTime = now
-                                        lastCalcBytes = totalBytesSent
-                                    } else {
-                                        callback.onProgress(5 + (idx * 90 / totalChunks))
-                                    }
-
-                                    bumpWatchdog()
+                                    fileSize = total
                                 }
-                                Log.i(TAG, "All $idx chunks successfully enqueued, awaiting saved ack")
                             }
                         } catch (e: Exception) {
-                            Log.e(TAG, "startTransfer failed", e)
-                            if (finishedFlag.compareAndSet(false, true)) {
-                                callback.onError(context.getString(R.string.error_send_failed, e.message ?: ""))
-                                try { webSocket.close(1000, null) } catch (_: Exception) {}
-                            }
-                        } finally {
-                            // Always clean up the cache probe file, success or failure.
-                            try { tempFile?.delete() } catch (_: Exception) {}
+                            callback.onError(context.getString(R.string.error_read_failed, e.message ?: ""))
+                            finishedFlag.set(true)
+                            break
                         }
-                    }.start()
+                    }
+
+                    if (fileSize <= 0) {
+                        callback.onError(context.getString(R.string.error_unknown_size))
+                        finishedFlag.set(true)
+                        break
+                    }
+
+                    val chunkSize = 1024 * 1024
+                    val totalChunks = ((fileSize + chunkSize - 1) / chunkSize).toInt()
+
+                    // Send metadata
+                    val meta = JSONObject().apply {
+                        put("type", "file_meta")
+                        put("filename", filename)
+                        put("mime", mimeType)
+                        put("size", fileSize)
+                        put("chunks", totalChunks)
+                        put("display_mode", WameedPrefs.getDisplayMode(context))
+                    }
+                    currentWebSocket.send(meta.toString())
+                    bumpWatchdog()
+
+                    // Stream binary data
+                    val inputStream = if (tempFile != null) java.io.FileInputStream(tempFile) 
+                                      else context.contentResolver.openInputStream(uri)
+                    
+                    try {
+                        inputStream?.use { stream ->
+                            val buffer = ByteArray(chunkSize)
+                            var chunkIdx = 0
+                            var n: Int
+                            var totalBytesSent = 0L
+                            var lastCalcTime = System.currentTimeMillis()
+                            var lastCalcBytes = 0L
+
+                            while (stream.read(buffer).also { n = it } > 0) {
+                                if (finishedFlag.get()) break
+                                
+                                // Flow control: throttle if OS buffer is full
+                                // زيادة سعة المخزن المؤقت لضمان تدفق مستمر كالبرق
+                                while (currentWebSocket!!.queueSize() > 16 * 1024 * 1024) {
+                                    Thread.sleep(1) // تقليل وقت الانتظار لزيادة الاستجابة
+                                    bumpWatchdog()
+                                }
+
+                                val chunkData = buffer.toByteString(0, n)
+                                if (!currentWebSocket!!.send(chunkData)) {
+                                    throw IOException("Failed to enqueue chunk")
+                                }
+
+                                totalBytesSent += n
+                                chunkIdx++
+
+                                val now = System.currentTimeMillis()
+                                if (now - lastCalcTime >= 100) { // تحديث كل 100 ملي ثانية بدلاً من 500 لزيادة النعومة
+                                    val deltaSec = (now - lastCalcTime) / 1000.0
+                                    val deltaBytes = totalBytesSent - lastCalcBytes
+                                    val speedMbps = (deltaBytes * 8.0) / (1024.0 * 1024.0 * deltaSec)
+                                    // نصل إلى 98% بحد أقصى أثناء الإرسال الفعلي
+                                    val progress = 5 + (chunkIdx * 93 / totalChunks) 
+                                    callback.onProgress(progress, speedMbps)
+                                    lastCalcTime = now
+                                    lastCalcBytes = totalBytesSent
+                                }
+                                bumpWatchdog()
+                            }
+                        }
+                    } catch (e: Exception) {
+                        callback.onError(context.getString(R.string.error_send_failed, e.message ?: ""))
+                        finishedFlag.set(true)
+                    } finally {
+                        tempFile?.delete()
+                    }
+
+                    if (finishedFlag.get()) break
+
+                    // ننتظر الرد من الكمبيوتر. نقوم بعمل poll قصير أولاً قبل إظهار حالة "جاري الحفظ"
+                    // لتجنب رعشة الواجهة (Flicker) في الملفات السريعة.
+                    val fileWatchdogMs = maxOf(30_000L, fileSize / (256L * 1024) * 1000L + 30_000L)
+                    var ackReceived = false
+                    val ackStart = System.currentTimeMillis()
+                    
+                    var firstPoll = true
+                    while (System.currentTimeMillis() - ackStart < fileWatchdogMs) {
+                        // في أول محاولة، ننتظر 150ms فقط، إذا وصل الرد نتجاوز رسالة "جاري الحفظ"
+                        val pollTimeout = if (firstPoll) 150L else 50L
+                        val resp = responseQueue.poll(pollTimeout, TimeUnit.MILLISECONDS)
+                        
+                        if (resp == null) {
+                            if (firstPoll && !finishedFlag.get()) {
+                                callback.onInfo(context.getString(R.string.status_saving_on_pc))
+                                firstPoll = false
+                            }
+                            continue
+                        }
+
+                        val status = resp.optString("status")
+                        if (status == "saved") {
+                            ackReceived = true
+                            callback.onProgress(100) // اكتمال حقيقي عند الحفظ
+                            break
+                        } else if (status == "error") {
+                            callback.onError(resp.optString("message", context.getString(R.string.error_save_failed)))
+                            finishedFlag.set(true)
+                            break
+                        } else if (status == "ws_failure") {
+                            finishedFlag.set(true)
+                            break
+                        }
+                        bumpWatchdog()
+                    }
+
+                    if (!ackReceived && !finishedFlag.get()) {
+                        callback.onError(context.getString(R.string.error_timeout_pc_no_response))
+                        finishedFlag.set(true)
+                        break
+                    }
                 }
 
-                Log.i(TAG, "sendFile: opening WS to $wsUrl for $filename ($fileSize bytes)")
-                client.newWebSocket(request, object : WebSocketListener() {
-                    override fun onOpen(webSocket: WebSocket, response: Response) {
-                        try {
-                            Log.i(TAG, "WS opened, sending hello")
-                            bumpWatchdog()
-                            val hello = JSONObject().apply {
-                                put("type", "hello")
-                                put("device", WameedPrefs.getDeviceName())
-                                put("device_id", WameedPrefs.getOrCreateDeviceId(context))
-                                put("app_version", "1.1.0")
-                            }
-                            webSocket.send(hello.toString())
-                            // Do NOT start file_meta yet — wait for `paired` / `hello` reply.
-                        } catch (e: Exception) {
-                            if (finishedFlag.compareAndSet(false, true)) {
-                                callback.onError(context.getString(R.string.error_open_ws_failed, e.message ?: ""))
-                                try { webSocket.close(1000, null) } catch (_: Exception) {}
-                            }
-                        }
-                    }
+                if (!finishedFlag.get()) {
+                    markSendSuccess()
+                    callback.onSuccess(context.getString(R.string.status_saved))
+                }
 
-                    override fun onMessage(webSocket: WebSocket, text: String) {
-                        if (finishedFlag.get()) return
-                        bumpWatchdog()
-                        Log.d(TAG, "WS message: $text")
-                        try {
-                            val resp = JSONObject(text)
-                            when (resp.optString("status")) {
-                                "pairing_required" -> {
-                                    Log.i(TAG, "PC requires pairing approval")
-                                    callback.onInfo(context.getString(R.string.info_pairing_approval))
-                                    // Pairing dialog may be invisible behind
-                                    // other windows — give the user 3 minutes
-                                    // to find and approve it.
-                                    lastProgressMs.set(
-                                        System.currentTimeMillis() + 3 * 60_000L)
-                                }
-                                "paired", "hello" -> {
-                                    Log.i(TAG, "PC paired — starting transfer")
-                                    startTransfer(webSocket)
-                                }
-                                "rejected" -> {
-                                    if (finishedFlag.compareAndSet(false, true)) {
-                                        val msg = resp.optString("message",
-                                            context.getString(R.string.error_pairing_rejected))
-                                        callback.onError(msg)
-                                        try { webSocket.close(1000, null) } catch (_: Exception) {}
-                                    }
-                                }
-                                "saved" -> {
-                                    Log.i(TAG, "PC confirmed save: ${resp.optString("path")}")
-                                    if (finishedFlag.compareAndSet(false, true)) {
-                                        callback.onProgress(100)
-                                        markSendSuccess()
-                                        callback.onSuccess(context.getString(R.string.status_saved))
-                                        try { webSocket.close(1000, null) } catch (_: Exception) {}
-                                    }
-                                }
-                                "progress" -> {
-                                    // Receiver confirms it got N bytes — real
-                                    // network progress. Bump watchdog so large
-                                    // files don't false-timeout.
-                                    bumpWatchdog()
-                                }
-                                "error" -> {
-                                    if (finishedFlag.compareAndSet(false, true)) {
-                                        callback.onError(resp.optString("message",
-                                            context.getString(R.string.error_save_failed)))
-                                        try { webSocket.close(1000, null) } catch (_: Exception) {}
-                                    }
-                                }
-                                else -> {
-                                    // Unknown — assume success to avoid blocking.
-                                    if (finishedFlag.compareAndSet(false, true)) {
-                                        markSendSuccess()
-                                        callback.onSuccess(context.getString(R.string.status_sent))
-                                        try { webSocket.close(1000, null) } catch (_: Exception) {}
-                                    }
-                                }
-                            }
-                        } catch (e: Exception) {
-                            if (finishedFlag.compareAndSet(false, true)) {
-                                markSendSuccess()
-                                callback.onSuccess(context.getString(R.string.status_sent))
-                                try { webSocket.close(1000, null) } catch (_: Exception) {}
-                            }
-                        }
-                    }
-
-                    override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                        Log.e(TAG, "WS send failure: ${t.javaClass.simpleName}: ${t.message} | resp=${response?.code}", t)
-                        if (finishedFlag.compareAndSet(false, true)) {
-                            val msg = when {
-                                t is java.net.ConnectException -> context.getString(R.string.error_connect_failed)
-                                t is java.net.SocketTimeoutException -> context.getString(R.string.error_socket_timeout)
-                                else -> context.getString(R.string.error_connection_dropped, t.message ?: context.getString(R.string.error_unknown_reason))
-                            }
-                            callback.onError(msg)
-                        }
-                    }
-                })
             } catch (e: Exception) {
-                callback.onError(context.getString(R.string.error_general, e.message ?: ""))
+                if (finishedFlag.compareAndSet(false, true)) {
+                    callback.onError(context.getString(R.string.error_general, e.message ?: ""))
+                }
+            } finally {
+                currentWebSocket?.close(1000, null)
+                finishedFlag.set(true)
             }
         }.start()
     }
@@ -429,7 +472,7 @@ class WameedSender(private val context: Context) {
                     put("type", "hello")
                     put("device", WameedPrefs.getDeviceName())
                     put("device_id", WameedPrefs.getOrCreateDeviceId(context))
-                    put("app_version", "1.1.0")
+                    put("app_version", BuildConfig.VERSION_NAME)
                 }
                 webSocket.send(hello.toString())
                 // For ping we fire the payload immediately (server responds pong

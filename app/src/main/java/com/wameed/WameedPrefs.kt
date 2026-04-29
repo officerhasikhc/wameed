@@ -202,9 +202,12 @@ object WameedPrefs {
     }
 
     // ===== Display Mode =====
-    // "open" = فتح فوري | "path" = إشعار بالمسار | "both" = كلاهما
+    // "open" = فتح الملف فقط (الافتراضي)
+    // "path" = فتح المجلد فقط
+    // "both" = فتح الملف والمجلد معاً
+    // "none" = لا شيء (إشعار فقط)
     fun getDisplayMode(context: Context): String {
-        return prefs(context).getString(KEY_DISPLAY_MODE, "both") ?: "both"
+        return prefs(context).getString(KEY_DISPLAY_MODE, "open") ?: "open"
     }
 
     fun setDisplayMode(context: Context, mode: String) {
