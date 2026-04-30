@@ -31,12 +31,15 @@ class WameedUpdateManager private constructor(private val context: Context) {
     private val client = OkHttpClient.Builder()
         .connectTimeout(30, TimeUnit.SECONDS)
         .readTimeout(5, TimeUnit.MINUTES)
+        .followRedirects(true)
+        .followSslRedirects(true)
         .build()
     private val crashReporter = WameedCrashReporter.getInstance()
     private val UPDATE_JSON_URL = "https://raw.githubusercontent.com/officerhasikhc/wameed/main/update.json"
 
     private var pendingUpdateUrl: String? = null
     private var pendingReleaseNotes: String? = null
+    @Volatile private var isChecking = false
 
     // حالة التحديث
     private val _updateState = MutableStateFlow<UpdateState>(UpdateState.Idle)
@@ -62,6 +65,11 @@ class WameedUpdateManager private constructor(private val context: Context) {
      */
     suspend fun checkForUpdates(isManual: Boolean = false): Boolean {
         Log.w(TAG, "▶ checkForUpdates(isManual=$isManual) started")
+        if (isChecking) {
+            Log.w(TAG, "▶ Already checking — skipped")
+            return false
+        }
+        isChecking = true
         if (isManual) _updateState.value = UpdateState.Checking
 
         return withContext(Dispatchers.IO) {
@@ -124,6 +132,8 @@ class WameedUpdateManager private constructor(private val context: Context) {
                     _updateState.value = UpdateState.Idle
                 }
                 false
+            } finally {
+                isChecking = false
             }
         }
     }
@@ -166,16 +176,25 @@ class WameedUpdateManager private constructor(private val context: Context) {
                     Log.w(TAG, "حجم APK: ${contentLength / 1024} KB")
 
                     var bytesRead = 0L
+                    var lastReportedPercent = -1
                     FileOutputStream(apkFile).use { fos ->
                         body.byteStream().use { input ->
-                            val buffer = ByteArray(8192)
+                            val buffer = ByteArray(65536) // 64 KB buffer
                             var read: Int
                             while (input.read(buffer).also { read = it } != -1) {
                                 fos.write(buffer, 0, read)
                                 bytesRead += read
                                 if (contentLength > 0) {
-                                    val progress = bytesRead.toFloat() / contentLength
-                                    _updateState.value = UpdateState.Downloading(progress)
+                                    val percent = (bytesRead * 100 / contentLength).toInt()
+                                    // تحديث UI كل 2% فقط لتقليل الضغط
+                                    if (percent >= lastReportedPercent + 2) {
+                                        lastReportedPercent = percent
+                                        val progress = bytesRead.toFloat() / contentLength
+                                        _updateState.value = UpdateState.Downloading(progress)
+                                        if (percent % 20 == 0) {
+                                            Log.w(TAG, "⬇ تحميل: $percent% (${bytesRead / 1024} KB)")
+                                        }
+                                    }
                                 }
                             }
                         }

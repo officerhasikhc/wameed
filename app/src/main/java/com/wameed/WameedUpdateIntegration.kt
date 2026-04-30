@@ -22,12 +22,10 @@ fun UpdateIntegration(
     
     // Check for updates on app start (silently)
     LaunchedEffect(Unit) {
-        coroutineScope.launch {
-            delay(3000) // Wait a bit after app start
-            // البحث التلقائي صامت (isManual = false) حتى لا تظهر حالة "جاري البحث" في الإعدادات فجأة
-            if (updateManager.checkForUpdates(isManual = false)) {
-                showUpdateNotification.value = true
-            }
+        delay(3000) // Wait a bit after app start
+        // البحث التلقائي صامت (isManual = false) حتى لا تظهر حالة "جاري البحث" في الإعدادات فجأة
+        if (updateManager.checkForUpdates(isManual = false)) {
+            showUpdateNotification.value = true
         }
     }
     
