@@ -52,6 +52,10 @@ try:
 except Exception:
     FONT_AR = "Segoe UI"
 
+def fs(size):
+    """حجم خط ذكي: +1 للعربية، +2 للإنجليزية"""
+    return size + 1 if LANG == "ar" else size + 2
+
 # High DPI support for Windows
 try:
     from ctypes import windll
@@ -68,7 +72,7 @@ LANG = "ar"
 translations = {
     "ar": {
         "app_header": "وميض",
-        "status_ready": "⏳ جاهز للاستقبال",
+        "status_ready": "⚪ غير متصل",
         "status_connected_to": "✅ متصل بـ {name}",
         "status_starting": "جاري التشغيل...",
         "status_searching": "🔍 جاري البحث...",
@@ -117,11 +121,35 @@ translations = {
         "direction_received": "📥 مستلم",
         "discovered_devices": "📱 الأجهزة المكتشفة",
         "select_device": "اختر جهازاً للاتصال",
-        "no_devices_found": "لم يتم العثور على أجهزة 📵"
+        "no_devices_found": "لم يتم العثور على أجهزة 📵",
+        "manual_connect": "🔗 اتصال يدوي",
+        "manual_connect_title": "🔗 أدخل عنوان IP الهاتف",
+        "manual_connect_btn": "✓ اتصال",
+        "manual_connect_warn": "أدخل عنوان IP صالح",
+        "status_last_seen": "⚪ غير متصل (آخر اتصال قبل {mins} دقيقة)",
+        "selected_files": "الملفات المختارة:",
+        "add_more": "+ إضافة",
+        "no_files_selected": "لم يتم اختيار ملفات بعد",
+        "no_transfers_yet": "لا توجد عمليات نقل بعد",
+        "text_input_hint": "✏️ اكتب أو الصق النص هنا:",
+        "paste_clipboard": "📋 لصق من الحافظة",
+        "clear_all": "✕ مسح الكل",
+        "preparing": "جاري التحضير...",
+        "sending_progress": "⏳ جاري الإرسال...",
+        "sending_file": "إرسال ({idx}/{total}): {name}",
+        "saving_file": "جاري الحفظ: {name}...",
+        "retry_connect": "إعادة محاولة الاتصال ({attempt}/{max})... افتح التطبيق",
+        "found_devices": "✅ تم العثور على {count} جهاز",
+        "close": "✕ إغلاق",
+        "no_device_connected_error": "لا يوجد جهاز متصل!\n\nاستخدم 'بحث عن أجهزة' أو 'اتصال يدوي' من الصفحة الرئيسية أولاً.",
+        "auto_open_file_label": "فتح الملفات تلقائياً عند الاستلام",
+        "auto_open_folder_label": "فتح مجلد الحفظ عند الاستلام",
+        "warning": "تنبيه",
+        "lang_label": "اللغة / Language"
     },
     "en": {
         "app_header": "Wameed",
-        "status_ready": "⏳ Ready to receive",
+        "status_ready": "⚪ Not connected",
         "status_connected_to": "✅ Connected to {name}",
         "status_starting": "Starting...",
         "status_searching": "🔍 Searching...",
@@ -170,7 +198,31 @@ translations = {
         "direction_received": "📥 Received",
         "discovered_devices": "📱 Discovered Devices",
         "select_device": "Select a device to connect",
-        "no_devices_found": "No devices found 📵"
+        "no_devices_found": "No devices found 📵",
+        "manual_connect": "🔗 Manual Connect",
+        "manual_connect_title": "🔗 Enter phone IP address",
+        "manual_connect_btn": "✓ Connect",
+        "manual_connect_warn": "Enter a valid IP address",
+        "status_last_seen": "⚪ Not connected (last seen {mins} min ago)",
+        "selected_files": "Selected files:",
+        "add_more": "+ Add",
+        "no_files_selected": "No files selected yet",
+        "no_transfers_yet": "No transfers yet",
+        "text_input_hint": "✏️ Type or paste text here:",
+        "paste_clipboard": "📋 Paste from clipboard",
+        "clear_all": "✕ Clear all",
+        "preparing": "Preparing...",
+        "sending_progress": "⏳ Sending...",
+        "sending_file": "Sending ({idx}/{total}): {name}",
+        "saving_file": "Saving: {name}...",
+        "retry_connect": "Retrying ({attempt}/{max})... Open the app",
+        "found_devices": "✅ Found {count} device(s)",
+        "close": "✕ Close",
+        "no_device_connected_error": "No device connected!\n\nUse 'Search Devices' or 'Manual Connect' from the home page first.",
+        "auto_open_file_label": "Auto-open files on receipt",
+        "auto_open_folder_label": "Open save folder on receipt",
+        "warning": "Warning",
+        "lang_label": "Language / اللغة"
     }
 }
 
@@ -229,6 +281,7 @@ state = {
     "history": [],
     "save_dir": os.path.join(os.path.expanduser("~"), "Downloads", "Wameed"),
     "auto_open": True,
+    "auto_open_folder": False,
     "lang": "ar",
     "running": True,
     "target_ip": ""
@@ -238,6 +291,7 @@ state = {
 connected_device = None  # الجهاز المتصل حالياً {"id", "name", "ip", "connected_at"}
 last_connection_time = None  # وقت آخر اتصال
 connection_check_thread = None  # Thread لفحص الاتصال الدوري
+active_connections = {}  # عدد اتصالات WebSocket النشطة لكل IP {ip: count}
 
 def load_config():
     if os.path.exists(CONFIG_FILE):
@@ -304,12 +358,12 @@ class WameedApp:
 
         # نص "وميض"
         tk.Label(header_frame, text=t("app_header"), bg="#2E7D32", fg="white",
-                 font=(FONT_AR, 22, "bold")).pack(side="right" if LANG=="ar" else "left", padx=5)
+                 font=(FONT_AR, fs(22), "bold")).pack(side="right" if LANG=="ar" else "left", padx=5)
 
         # --- Style ---
         style = ttk.Style()
         style.configure("TNotebook", background="#F8FAFC")
-        style.configure("TNotebook.Tab", font=(FONT_AR, 10), padding=[12, 4])
+        style.configure("TNotebook.Tab", font=(FONT_AR, fs(10)), padding=[12, 4])
 
         self.nb = ttk.Notebook(self.root)
         self.nb.pack(fill="both", expand=True, padx=12, pady=12)
@@ -329,14 +383,27 @@ class WameedApp:
         self._build_history()
         self._build_settings()
 
+        # تسجيل التنقل بين التبويبات
+        tab_names = {0: "الرئيسية", 1: "الأجهزة", 2: "السجل", 3: "الإعدادات"}
+        def on_tab_changed(event):
+            idx = self.nb.index(self.nb.select())
+            logger.info(f"📑 انتقال إلى تبويب: {tab_names.get(idx, idx)}")
+            # تحديث البيانات عند التنقل
+            if idx == 0: self._update_status_display(); self._refresh_recent()
+            elif idx == 1: self._build_devices()
+            elif idx == 2: self._build_history()
+        self.nb.bind("<<NotebookTabSelect>>", on_tab_changed)
+
         # بدء فحص حالة الاتصال الدوري
         self._start_connection_monitor()
+
+        logger.info(f"✅ تم تشغيل وميض بنجاح | الإصدار: {VERSION} | IP المحلي: {get_local_ip()}")
 
         # --- Bottom Bar ---
         btm = tk.Frame(self.root, bg="#F1F5F9", height=35)
         btm.pack(fill="x", side="bottom")
         tk.Label(btm, text=f"{t('version')} {VERSION} | {get_local_ip()}",
-                 bg="#F1F5F9", fg="#64748B", font=(FONT_AR, 9)).pack(pady=6)
+                 bg="#F1F5F9", fg="#64748B", font=(FONT_AR, fs(9))).pack(pady=6)
 
     def _build_home(self):
         for w in self.tab_home.winfo_children(): w.destroy()
@@ -353,23 +420,12 @@ class WameedApp:
 
         self._update_status_display()
 
-        # Target IP Entry - إدخال IP الهدف في الرئيسية
-        target_frame = tk.Frame(inner, bg="#F1F5F9", pady=8, padx=10)
-        target_frame.pack(fill="x", pady=(12, 0))
-
-        tk.Label(target_frame, text=t("target_ip"), bg="#F1F5F9", fg="#64748B",
-                 font=(FONT_AR, 9, "bold")).pack(side="right" if LANG=="ar" else "left")
-
+        # متغير IP مخفي (يُستخدم داخلياً فقط، لا يُعرض في الصفحة الرئيسية)
         self.home_ip_var = tk.StringVar(value=state.get("target_ip", ""))
         def on_ip_change(*args):
             state["target_ip"] = self.home_ip_var.get().strip()
             save_config()
         self.home_ip_var.trace_add("write", on_ip_change)
-
-        self.home_ip_entry = tk.Entry(target_frame, textvariable=self.home_ip_var, font=(FONT_AR, 11),
-                                     bd=0, relief="flat", justify="center", bg="white",
-                                     highlightthickness=1, highlightbackground="#CBD5E1")
-        self.home_ip_entry.pack(side="right" if LANG=="ar" else "left", fill="x", expand=True, padx=8)
 
         # أزرار الإجراء السريع — صف أفقي
         quick_frame = tk.Frame(self.tab_home, bg="white")
@@ -377,7 +433,7 @@ class WameedApp:
 
         # زر الإرسال الرئيسي (بارز)
         tk.Button(quick_frame, text=f"⚡ {t('btn_send')}", bg="#2E7D32", fg="white",
-                  font=(FONT_AR, 12, "bold"), bd=0, pady=12, cursor="hand2",
+                  font=(FONT_AR, fs(12), "bold"), bd=0, pady=12, cursor="hand2",
                   activebackground="#1B5E20", activeforeground="white",
                   command=self._show_send_dialog).pack(fill="x", pady=(0, 6))
 
@@ -386,13 +442,18 @@ class WameedApp:
         sub_btn_frame.pack(fill="x")
 
         search_btn = tk.Button(sub_btn_frame, text=t("btn_search_devices"), bg="#EFF6FF", fg="#2563EB",
-                  font=(FONT_AR, 9, "bold"), bd=0, pady=8, cursor="hand2",
+                  font=(FONT_AR, fs(9), "bold"), bd=0, pady=8, cursor="hand2",
                   activebackground="#DBEAFE", activeforeground="#1D4ED8",
                   command=self._show_discovery_dialog)
         search_btn.pack(side="left", fill="x", expand=True, padx=(0, 4))
 
+        tk.Button(sub_btn_frame, text=t("manual_connect"), bg="#F0FDF4", fg="#16A34A",
+                  font=(FONT_AR, fs(9), "bold"), bd=0, pady=8, cursor="hand2",
+                  activebackground="#DCFCE7", activeforeground="#15803D",
+                  command=self._show_manual_ip_dialog).pack(side="left", fill="x", expand=True, padx=(4, 4))
+
         tk.Button(sub_btn_frame, text=t("btn_open_folder"), bg="#F1F5F9", fg="#475569",
-                  font=(FONT_AR, 9, "bold"), bd=0, pady=8, cursor="hand2",
+                  font=(FONT_AR, fs(9), "bold"), bd=0, pady=8, cursor="hand2",
                   activebackground="#E2E8F0",
                   command=lambda: os.startfile(state["save_dir"])).pack(side="left", fill="x", expand=True, padx=(4, 0))
 
@@ -403,7 +464,7 @@ class WameedApp:
         rec_label_frame = tk.Frame(self.tab_home, bg="white")
         rec_label_frame.pack(fill="x", padx=18, pady=(4, 5))
         tk.Label(rec_label_frame, text=t("recent_files"), bg="white",
-                 font=(FONT_AR, 10, "bold"), fg="#475569").pack(side="right" if LANG=="ar" else "left")
+                 font=(FONT_AR, fs(10), "bold"), fg="#475569").pack(side="right" if LANG=="ar" else "left")
 
         self.recent_container = tk.Frame(self.tab_home, bg="white")
         self.recent_container.pack(fill="both", expand=True, padx=16)
@@ -416,8 +477,8 @@ class WameedApp:
             empty = tk.Frame(self.recent_container, bg="white")
             empty.pack(expand=True)
             tk.Label(empty, text="📭", font=(FONT_AR, 24), bg="white", fg="#CBD5E1").pack(pady=(20, 4))
-            tk.Label(empty, text="لا توجد عمليات نقل بعد",
-                    bg="white", fg="#94A3B8", font=(FONT_AR, 10)).pack()
+            tk.Label(empty, text=t("no_transfers_yet"),
+                    bg="white", fg="#94A3B8", font=(FONT_AR, fs(10))).pack()
             return
 
         def _icon_for(fn, direction="received"):
@@ -439,14 +500,14 @@ class WameedApp:
             row = tk.Frame(self.recent_container, bg="#FAFAFA", pady=6, padx=10)
             row.pack(fill="x", pady=2)
 
-            tk.Label(row, text=icon, bg="#FAFAFA", font=(FONT_AR, 14)).pack(
+            tk.Label(row, text=icon, bg="#FAFAFA", font=(FONT_AR, fs(14))).pack(
                 side="right" if LANG=="ar" else "left", padx=(0, 8))
 
             info = tk.Frame(row, bg="#FAFAFA")
             info.pack(side="right" if LANG=="ar" else "left", fill="x", expand=True)
 
             display_name = fname if len(fname) < 30 else fname[:27] + "..."
-            tk.Label(info, text=display_name, bg="#FAFAFA", font=(FONT_AR, 9, "bold"),
+            tk.Label(info, text=display_name, bg="#FAFAFA", font=(FONT_AR, fs(9), "bold"),
                     fg="#1E293B", anchor="e" if LANG=="ar" else "w").pack(fill="x")
 
             detail_txt = ftime
@@ -454,12 +515,12 @@ class WameedApp:
                 detail_txt = f"{ftime} | {t('direction_sent')}"
 
             tk.Label(info, text=detail_txt, bg="#FAFAFA", fg="#94A3B8",
-                    font=(FONT_AR, 7), anchor="e" if LANG=="ar" else "w").pack(fill="x")
+                    font=(FONT_AR, fs(7)), anchor="e" if LANG=="ar" else "w").pack(fill="x")
 
             if fpath and os.path.exists(fpath):
                 tk.Button(row, text="👁️", command=lambda p=fpath: os.startfile(p),
                          bg="#FAFAFA", fg="#3B82F6", bd=0, cursor="hand2",
-                         font=(FONT_AR, 11)).pack(side="left" if LANG=="ar" else "right", padx=4)
+                         font=(FONT_AR, fs(11))).pack(side="left" if LANG=="ar" else "right", padx=4)
 
     def _update_status_display(self):
         """تحديث عرض الحالة الذكية"""
@@ -472,24 +533,34 @@ class WameedApp:
             device_name = connected_device.get("name", "جهاز غير معروف")
             status_text = t("status_connected_to").format(name=device_name)
             dot_color = "#22C55E"  # أخضر
+            show_ip = True
         elif last_connection_time:
             # كان متصلاً سابقاً (خلال 30 دقيقة)
             elapsed = (datetime.now() - last_connection_time).total_seconds()
             if elapsed < 1800:  # أقل من 30 دقيقة
-                status_text = t("status_ready") + f" (آخر اتصال قبل {int(elapsed/60)} دقيقة)"
+                mins = max(1, int(elapsed / 60))
+                status_text = t("status_last_seen").format(mins=mins)
             else:
                 status_text = t("status_ready")
             dot_color = "#FBBF24"  # أصفر
+            show_ip = False
         else:
             status_text = t("status_ready")
             dot_color = "#9CA3AF"  # رمادي
+            show_ip = False
 
         self.status_dot = tk.Label(self.status_frame, text="●", fg=dot_color, bg="#F8FAFC", font=(FONT_AR, 18))
         self.status_dot.pack(side="right" if LANG=="ar" else "left", padx=8)
 
         self.status_label = tk.Label(self.status_frame, text=status_text,
-                                     bg="#F8FAFC", font=(FONT_AR, 12, "bold"), fg="#1E293B")
+                                     bg="#F8FAFC", font=(FONT_AR, fs(12), "bold"), fg="#1E293B")
         self.status_label.pack(side="right" if LANG=="ar" else "left")
+
+        # تسجيل حالة الاتصال فقط عند تغيرها (لتقليل الضجيج)
+        new_status = status_text
+        if not hasattr(self, '_last_logged_status') or self._last_logged_status != new_status:
+            self._last_logged_status = new_status
+            logger.info(f"🔄 تحديث الحالة: {new_status}")
 
     def _start_connection_monitor(self):
         """بدء مراقبة الاتصال الدورية والبحث التلقائي"""
@@ -524,6 +595,47 @@ class WameedApp:
                     self.home_ip_var.set(ip)
                 logger.info(f"Auto-selected discovered device: {device.get('name')} ({ip})")
 
+    def _show_manual_ip_dialog(self):
+        """نافذة إدخال IP يدوي للاتصال"""
+        logger.info("فتح نافذة الاتصال اليدوي")
+        dialog = tk.Toplevel(self.root)
+        dialog.title("🔗 اتصال يدوي")
+        dialog.geometry("360x180")
+        dialog.configure(bg="white")
+        dialog.transient(self.root)
+        dialog.grab_set()
+        dialog.resizable(False, False)
+
+        tk.Label(dialog, text=t("manual_connect_title"), font=(FONT_AR, fs(13), "bold"),
+                bg="white", fg="#1E293B").pack(pady=(20, 10))
+
+        ip_var = tk.StringVar(value=state.get("target_ip", ""))
+        ip_entry = tk.Entry(dialog, textvariable=ip_var, font=(FONT_AR, fs(14)),
+                           bd=0, relief="flat", justify="center", bg="#F1F5F9",
+                           highlightthickness=2, highlightbackground="#CBD5E1",
+                           highlightcolor="#3B82F6", width=20)
+        ip_entry.pack(padx=30, pady=5, ipady=6)
+        ip_entry.focus_set()
+
+        def connect():
+            ip = ip_var.get().strip()
+            if ip:
+                logger.info(f"اتصال يدوي بـ IP: {ip}")
+                state["target_ip"] = ip
+                save_config()
+                if hasattr(self, 'home_ip_var'):
+                    self.home_ip_var.set(ip)
+                dialog.destroy()
+            else:
+                messagebox.showwarning(t("warning"), t("manual_connect_warn"))
+
+        tk.Button(dialog, text=t("manual_connect_btn"), bg="#2E7D32", fg="white",
+                  font=(FONT_AR, fs(11), "bold"), bd=0, pady=8, cursor="hand2",
+                  activebackground="#1B5E20", activeforeground="white",
+                  command=connect).pack(fill="x", padx=30, pady=(10, 15))
+
+        ip_entry.bind("<Return>", lambda e: connect())
+
     def _show_discovery_dialog(self):
         """نافذة البحث عن الأجهزة والاتصال السريع"""
         logger.info("فتح نافذة البحث عن أجهزة📱")
@@ -535,11 +647,11 @@ class WameedApp:
         dialog.grab_set()
 
         # Header
-        tk.Label(dialog, text=t("discovered_devices"), font=(FONT_AR, 14, "bold"),
+        tk.Label(dialog, text=t("discovered_devices"), font=(FONT_AR, fs(14), "bold"),
                 bg="white", fg="#2E7D32").pack(pady=15)
 
         # Status label
-        status_label = tk.Label(dialog, text=t("status_searching"), font=(FONT_AR, 10),
+        status_label = tk.Label(dialog, text=t("status_searching"), font=(FONT_AR, fs(10)),
                                bg="white", fg="#3B82F6")
         status_label.pack()
 
@@ -547,7 +659,7 @@ class WameedApp:
         list_frame = tk.Frame(dialog, bg="white", bd=1, relief="solid")
         list_frame.pack(fill="both", expand=True, padx=20, pady=10)
 
-        devices_listbox = tk.Listbox(list_frame, font=(FONT_AR, 11), bd=0, selectmode="single")
+        devices_listbox = tk.Listbox(list_frame, font=(FONT_AR, fs(11)), bd=0, selectmode="single")
         devices_listbox.pack(fill="both", expand=True, padx=5, pady=5)
 
         discovered_devices = []
@@ -590,19 +702,19 @@ class WameedApp:
                     ip = device.get("ip", "")
                     display = f"📱 {name}"
                     devices_listbox.insert(tk.END, display)
-                status_label.config(text=f"✅ تم العثور على {len(found)} جهاز", fg="#22C55E")
+                status_label.config(text=t("found_devices").format(count=len(found)), fg="#22C55E")
             else:
                 logger.warning("لم يتم العثور على أي أجهزة هاتف نشطة")
                 status_label.config(text=t("no_devices_found"), fg="#EF4444")
 
         # زر البحث
         tk.Button(dialog, text="🔍 " + t("btn_search_devices"), command=search_devices,
-                 bg="#3B82F6", fg="white", font=(FONT_AR, 10, "bold"),
+                 bg="#3B82F6", fg="white", font=(FONT_AR, fs(10), "bold"),
                  bd=0, pady=8, cursor="hand2").pack(fill="x", padx=20, pady=5)
 
         # إغلاق
-        tk.Button(dialog, text="✕ إغلاق", command=dialog.destroy,
-                 bg="#E2E8F0", fg="#1E293B", font=(FONT_AR, 9),
+        tk.Button(dialog, text=t("close"), command=dialog.destroy,
+                 bg="#E2E8F0", fg="#1E293B", font=(FONT_AR, fs(9)),
                  bd=0, pady=6).pack(fill="x", padx=20, pady=5)
 
         # بدء البحث تلقائياً
@@ -659,19 +771,19 @@ class WameedApp:
         # Header
         header = tk.Frame(self.tab_devices, bg="#F8FAFC", padx=20, pady=15)
         header.pack(fill="x")
-        tk.Label(header, text=t("tab_devices"), font=(FONT_AR, 14, "bold"),
+        tk.Label(header, text=t("tab_devices"), font=(FONT_AR, fs(14), "bold"),
                 bg="#F8FAFC", fg="#2E7D32").pack(side="right" if LANG=="ar" else "left")
 
         if not state["trusted_devices"] and not state.get("device_history", []):
             # لا توجد أجهزة
             empty_frame = tk.Frame(self.tab_devices, bg="white")
             empty_frame.pack(expand=True)
-            tk.Label(empty_frame, text=t("no_devices"), font=(FONT_AR, 12),
+            tk.Label(empty_frame, text=t("no_devices"), font=(FONT_AR, fs(12)),
                     bg="white", fg="#94A3B8").pack(pady=50)
 
             tk.Button(empty_frame, text="🔍 " + t("btn_search_devices"),
                      command=self._show_discovery_dialog, bg="#3B82F6", fg="white",
-                     font=(FONT_AR, 10, "bold"), bd=0, pady=8, padx=20).pack()
+                     font=(FONT_AR, fs(10), "bold"), bd=0, pady=8, padx=20).pack()
             return
 
         # Canvas for scrolling
@@ -730,20 +842,20 @@ class WameedApp:
             name_frame = tk.Frame(row, bg="white")
             name_frame.pack(fill="x")
 
-            tk.Label(name_frame, text=icon, bg="white", font=(FONT_AR, 16)).pack(side="right" if LANG=="ar" else "left", padx=5)
+            tk.Label(name_frame, text=icon, bg="white", font=(FONT_AR, fs(16))).pack(side="right" if LANG=="ar" else "left", padx=5)
 
             name_text = device["name"]
             if is_connected:
                 name_text += f"  {t('connected_now')}"
 
-            tk.Label(name_frame, text=name_text, bg="white", font=(FONT_AR, 11, "bold"),
+            tk.Label(name_frame, text=name_text, bg="white", font=(FONT_AR, fs(11), "bold"),
                     fg=color, anchor="e" if LANG=="ar" else "w").pack(side="right" if LANG=="ar" else "left", fill="x", expand=True)
 
             # وقت آخر اتصال
             if device.get("last_seen") and not is_connected:
                 time_text = t("last_connected").format(time=device["last_seen"])
                 tk.Label(row, text=time_text, bg="white", fg="#94A3B8",
-                        font=(FONT_AR, 9)).pack(anchor="e" if LANG=="ar" else "w")
+                        font=(FONT_AR, fs(9))).pack(anchor="e" if LANG=="ar" else "w")
 
             # زر الإرسال السريع (للأجهزة الموثوقة)
             if device["trusted"]:
@@ -759,7 +871,7 @@ class WameedApp:
                 btn_color = "#2E7D32"
 
                 tk.Button(row, text=btn_text, command=make_send_handler(current_ip, device["name"]),
-                         bg=btn_color, fg="white", font=(FONT_AR, 9, "bold"),
+                         bg=btn_color, fg="white", font=(FONT_AR, fs(9), "bold"),
                          bd=0, pady=5, padx=15, cursor="hand2").pack(anchor="e" if LANG=="ar" else "w", pady=5)
 
             # خط فاصل
@@ -825,14 +937,14 @@ class WameedApp:
         # Header
         header = tk.Frame(self.tab_history, bg="#F8FAFC", padx=20, pady=15)
         header.pack(fill="x")
-        tk.Label(header, text=t("tab_history"), font=(FONT_AR, 14, "bold"),
+        tk.Label(header, text=t("tab_history"), font=(FONT_AR, fs(14), "bold"),
                 bg="#F8FAFC", fg="#2E7D32").pack(side="right" if LANG=="ar" else "left")
 
         if not state["history"]:
             empty_frame = tk.Frame(self.tab_history, bg="white")
             empty_frame.pack(expand=True)
             tk.Label(empty_frame, text=t("no_history"), bg="white", fg="#94A3B8",
-                    font=(FONT_AR, 12)).pack(pady=50)
+                    font=(FONT_AR, fs(12))).pack(pady=50)
             return
 
         canvas = tk.Canvas(self.tab_history, bg="white", highlightthickness=0)
@@ -879,12 +991,12 @@ class WameedApp:
             top_row.pack(fill="x")
 
             icon = get_file_icon(filename, direction)
-            tk.Label(top_row, text=icon, bg=card_bg, font=(FONT_AR, 20)).pack(
+            tk.Label(top_row, text=icon, bg=card_bg, font=(FONT_AR, fs(20))).pack(
                 side="right" if LANG=="ar" else "left", padx=(0, 10))
 
             # اسم الملف (مختصر إذا طويل)
             display_name = filename if len(filename) < 35 else filename[:32] + "..."
-            tk.Label(top_row, text=display_name, bg=card_bg, font=(FONT_AR, 11, "bold"),
+            tk.Label(top_row, text=display_name, bg=card_bg, font=(FONT_AR, fs(11), "bold"),
                     anchor="e" if LANG=="ar" else "w").pack(
                 side="right" if LANG=="ar" else "left", fill="x", expand=True)
 
@@ -899,7 +1011,7 @@ class WameedApp:
                 info_text = f"{time_str}  •  {t('sent_to').format(device=device_name or 'الهاتف')}"
 
             tk.Label(bottom_row, text=info_text, bg=card_bg, fg="#64748B",
-                    font=(FONT_AR, 9)).pack(side="right" if LANG=="ar" else "left")
+                    font=(FONT_AR, fs(9))).pack(side="right" if LANG=="ar" else "left")
 
             # أزرار الإجراءات
             btn_frame = tk.Frame(bottom_row, bg=card_bg)
@@ -908,13 +1020,13 @@ class WameedApp:
             if filepath and os.path.exists(filepath):
                 # زر فتح الملف
                 tk.Button(btn_frame, text=t("open_file"), command=lambda p=filepath: os.startfile(p),
-                         bg="#10B981" if direction=="received" else "#3B82F6", fg="white", font=(FONT_AR, 8),
+                         bg="#10B981" if direction=="received" else "#3B82F6", fg="white", font=(FONT_AR, fs(8)),
                          bd=0, pady=3, padx=10, cursor="hand2").pack(side="right" if LANG=="ar" else "left", padx=2)
 
                 # زر فتح المجلد
                 folder = os.path.dirname(filepath)
                 tk.Button(btn_frame, text=t("open_folder"), command=lambda f=folder: os.startfile(f),
-                         bg="#64748B", fg="white", font=(FONT_AR, 8),
+                         bg="#64748B", fg="white", font=(FONT_AR, fs(8)),
                          bd=0, pady=3, padx=10, cursor="hand2").pack(side="right" if LANG=="ar" else "left", padx=2)
 
     def _build_settings(self):
@@ -924,12 +1036,13 @@ class WameedApp:
         container.pack(fill="both", expand=True)
 
         # Language
-        tk.Label(container, text="اللغة / Language", bg="white", font=(FONT_AR, 10, "bold")).pack(anchor="e" if LANG=="ar" else "w")
+        tk.Label(container, text=t("lang_label"), bg="white", font=(FONT_AR, fs(10), "bold")).pack(anchor="e" if LANG=="ar" else "w")
         lang_frame = tk.Frame(container, bg="white")
         lang_frame.pack(fill="x", pady=5)
 
         def set_lang(l):
             global LANG
+            logger.info(f"⚙️ تغيير اللغة: {LANG} → {l}")
             LANG = l
             save_config()
             self.setup_ui()
@@ -940,27 +1053,32 @@ class WameedApp:
         ttk.Separator(container).pack(fill="x", pady=15)
 
         # Save Dir
-        tk.Label(container, text=t("save_dir_label"), bg="white", font=(FONT_AR, 10, "bold")).pack(anchor="e" if LANG=="ar" else "w")
+        tk.Label(container, text=t("save_dir_label"), bg="white", font=(FONT_AR, fs(10), "bold")).pack(anchor="e" if LANG=="ar" else "w")
         path_frame = tk.Frame(container, bg="white")
         path_frame.pack(fill="x", pady=5)
 
         self.path_var = tk.StringVar(value=state["save_dir"])
-        tk.Entry(path_frame, textvariable=self.path_var, font=(FONT_AR, 9), bd=1, relief="solid").pack(side="right" if LANG=="ar" else "left", fill="x", expand=True, padx=5)
+        tk.Entry(path_frame, textvariable=self.path_var, font=(FONT_AR, fs(9)), bd=1, relief="solid").pack(side="right" if LANG=="ar" else "left", fill="x", expand=True, padx=5)
         tk.Button(path_frame, text="...", command=self.browse_folder).pack(side="right" if LANG=="ar" else "left")
 
-        # Auto Open
+        # Auto Open File
         self.auto_open_var = tk.BooleanVar(value=state["auto_open"])
-        tk.Checkbutton(container, text=t("auto_open_label"), variable=self.auto_open_var,
-                       bg="white", font=(FONT_AR, 10), command=self.toggle_auto_open).pack(anchor="e" if LANG=="ar" else "w", pady=10)
+        tk.Checkbutton(container, text=t("auto_open_file_label"), variable=self.auto_open_var,
+                       bg="white", font=(FONT_AR, fs(10)), command=self.toggle_auto_open).pack(anchor="e" if LANG=="ar" else "w", pady=(10, 0))
+
+        # Auto Open Folder
+        self.auto_open_folder_var = tk.BooleanVar(value=state.get("auto_open_folder", False))
+        tk.Checkbutton(container, text=t("auto_open_folder_label"), variable=self.auto_open_folder_var,
+                       bg="white", font=(FONT_AR, fs(10)), command=self.toggle_auto_open_folder).pack(anchor="e" if LANG=="ar" else "w", pady=(0, 10))
 
         # Trusted Devices
-        tk.Label(container, text=t("trusted_devices"), bg="white", font=(FONT_AR, 10, "bold")).pack(anchor="e" if LANG=="ar" else "w", pady=(10, 2))
-        self.devices_list = tk.Listbox(container, height=5, font=(FONT_AR, 9), bd=1, relief="solid")
+        tk.Label(container, text=t("trusted_devices"), bg="white", font=(FONT_AR, fs(10), "bold")).pack(anchor="e" if LANG=="ar" else "w", pady=(10, 2))
+        self.devices_list = tk.Listbox(container, height=5, font=(FONT_AR, fs(9)), bd=1, relief="solid")
         self.devices_list.pack(fill="x")
         self.refresh_devices_list()
 
         tk.Button(container, text=t("delete_device"), command=self.remove_device,
-                  bg="#FEE2E2", fg="#991B1B", bd=0, pady=5, font=(FONT_AR, 9)).pack(anchor="e" if LANG=="ar" else "w", pady=5)
+                  bg="#FEE2E2", fg="#991B1B", bd=0, pady=5, font=(FONT_AR, fs(9))).pack(anchor="e" if LANG=="ar" else "w", pady=5)
 
     def _broadcast_discovery(self, timeout=2.0):
         """يرسل رسالة UDP Broadcast للبحث عن الهواتف التي تشغل تطبيق وميض"""
@@ -998,7 +1116,7 @@ class WameedApp:
 
     def _show_send_dialog(self, device_ip=None, device_name=None):
         """نافذة الإرسال الاحترافية - تدعم التعدد والتصميم الحديث"""
-        logger.info(f"Opening send dialog. Target: {device_name} ({device_ip})")
+        logger.info(f"📤 فتح نافذة الإرسال | الهدف: {device_name or 'غير محدد'} ({device_ip or state.get('target_ip', 'لا يوجد IP')})")
         win = tk.Toplevel(self.root)
         win.title(t("btn_send"))
         win.geometry("520x680")
@@ -1027,7 +1145,7 @@ class WameedApp:
         # خط فاصل فوق المنطقة السفلية
         tk.Frame(win, bg="#E2E8F0", height=1).pack(side="bottom", fill="x")
 
-        # محاولة العثور على IP تلقائياً
+        # تحديد IP الهدف تلقائياً (بدون عرض حقل IP في نافذة الإرسال)
         initial_ip = device_ip or state.get("target_ip", "")
         if not initial_ip and connected_device:
             initial_ip = connected_device.get("ip", "")
@@ -1036,55 +1154,34 @@ class WameedApp:
 
         self.target_ip_var = tk.StringVar(value=initial_ip if initial_ip else "")
 
-        # مزامنة IP مع الإعدادات العامة عند التغيير
-        def sync_ip_to_state(*args):
-            val = self.target_ip_var.get().strip()
-            state["target_ip"] = val
-            if hasattr(self, 'home_ip_var'):
-                self.home_ip_var.set(val)
-        self.target_ip_var.trace_add("write", sync_ip_to_state)
-
-        # IP row
-        ip_row = tk.Frame(bottom_frame, bg="white")
-        ip_row.pack(fill="x", pady=(0, 8))
-
-        tk.Label(ip_row, text=t("target_ip"), bg="white", fg="#64748B",
-                font=(FONT_AR, 9, "bold")).pack(side="right" if LANG=="ar" else "left")
-
-        ip_entry = tk.Entry(ip_row, textvariable=self.target_ip_var, font=(FONT_AR, 11),
-                           bd=0, relief="flat", justify="center", bg="#F1F5F9",
-                           highlightthickness=1, highlightbackground="#CBD5E1",
-                           highlightcolor="#3B82F6")
-        ip_entry.pack(side="left" if LANG=="ar" else "right", fill="x", expand=True, padx=(10, 0))
-
         # حالة الإرسال (مخفية للبداية)
         self.send_status_frame = tk.Frame(bottom_frame, bg="white")
         self.progress_var = tk.DoubleVar(value=0)
         self.progress_bar = ttk.Progressbar(self.send_status_frame, orient="horizontal",
                                            mode="determinate", variable=self.progress_var)
         self.progress_bar.pack(fill="x", pady=4)
-        self.progress_label = tk.Label(self.send_status_frame, text="جاري التحضير...",
-                                      bg="white", font=(FONT_AR, 9), fg="#64748B")
+        self.progress_label = tk.Label(self.send_status_frame, text=t("preparing"),
+                                      bg="white", font=(FONT_AR, fs(9)), fg="#64748B")
         self.progress_label.pack()
 
         def start_sending():
             ip = self.target_ip_var.get().strip()
             if not ip:
-                logger.warning("Send attempt failed: No IP address entered.")
-                messagebox.showerror("خطأ", "يجب إدخال عنوان IP الهاتف أولاً")
+                logger.warning("Send attempt failed: No target device connected.")
+                messagebox.showerror(t("error"), t("no_device_connected_error"))
                 return
 
             mode = tabs.index(tabs.select())
             logger.info(f"Send button clicked. Mode: {'Files' if mode == 0 else 'Text'}, Target IP: {ip}")
 
             self.send_status_frame.pack(fill="x", before=send_btn, pady=(4, 0))
-            send_btn.config(state="disabled", text="⏳ جاري الإرسال...",
+            send_btn.config(state="disabled", text=t("sending_progress"),
                           bg="#66BB6A", cursor="watch")
 
             if mode == 0: # ملفات
                 if not self.selected_files:
-                    logger.warning("Send attempt failed: No files selected.")
-                    messagebox.showerror("خطأ", "برجاء اختيار ملف واحد على الأقل")
+                    logger.warning("⚠️ محاولة إرسال فاشلة: لم يتم اختيار ملفات")
+                    messagebox.showerror(t("error"), t("select_file_first"))
                     self.send_status_frame.pack_forget()
                     send_btn.config(state="normal", text=f"⚡ {t('send_now')}", bg="#2E7D32", cursor="hand2")
                     return
@@ -1094,7 +1191,7 @@ class WameedApp:
                 txt = self.send_text_area.get("1.0", "end").strip()
                 if not txt:
                     logger.warning("Send attempt failed: Text area is empty.")
-                    messagebox.showerror("خطأ", "لا يوجد نص لإرساله")
+                    messagebox.showerror(t("error"), t("enter_text_first"))
                     self.send_status_frame.pack_forget()
                     send_btn.config(state="normal", text=f"⚡ {t('send_now')}", bg="#2E7D32", cursor="hand2")
                     return
@@ -1102,7 +1199,7 @@ class WameedApp:
                 threading.Thread(target=self._execute_send_text, args=(ip, txt, win, self.progress_var, device_name, lambda: win.destroy()), daemon=True).start()
 
         send_btn = tk.Button(bottom_frame, text=f"⚡ {t('send_now')}", command=start_sending,
-                            bg="#2E7D32", fg="white", font=(FONT_AR, 14, "bold"),
+                            bg="#2E7D32", fg="white", font=(FONT_AR, fs(14), "bold"),
                             bd=0, pady=14, cursor="hand2",
                             activebackground="#1B5E20", activeforeground="white")
         send_btn.pack(fill="x", pady=(8, 0))
@@ -1110,7 +1207,7 @@ class WameedApp:
         # ===== تبويبات التصميم الحديث =====
         style = ttk.Style()
         style.configure("Send.TNotebook", background="#F8FAFC")
-        style.configure("Send.TNotebook.Tab", font=(FONT_AR, 11), padding=[20, 8])
+        style.configure("Send.TNotebook.Tab", font=(FONT_AR, fs(11)), padding=[20, 8])
 
         tabs = ttk.Notebook(win, style="Send.TNotebook")
         tabs.pack(fill="both", expand=True, padx=16, pady=(12, 8))
@@ -1141,21 +1238,21 @@ class WameedApp:
         drop_text_frame.pack(side="left" if LANG=="ar" else "right")
 
         self.drop_txt = tk.Label(drop_text_frame, text=t("drop_here"),
-                                bg="#F0FFF4", font=(FONT_AR, 11, "bold"), fg="#166534")
+                                bg="#F0FFF4", font=(FONT_AR, fs(11), "bold"), fg="#166534")
         self.drop_txt.pack()
         tk.Label(drop_text_frame, text=t("or_click_browse"),
-                bg="#F0FFF4", font=(FONT_AR, 9), fg="#4ADE80").pack()
+                bg="#F0FFF4", font=(FONT_AR, fs(9)), fg="#4ADE80").pack()
 
         # قائمة الملفات المختارة (Scrollable)
         list_header = tk.Frame(file_container, bg="white")
         list_header.pack(fill="x")
-        tk.Label(list_header, text="الملفات المختارة:", bg="white",
-                font=(FONT_AR, 9, "bold"), fg="#64748B").pack(
+        tk.Label(list_header, text=t("selected_files"), bg="white",
+                font=(FONT_AR, fs(9), "bold"), fg="#64748B").pack(
                     side="right" if LANG=="ar" else "left")
 
         # زر إضافة ملفات إضافية
-        add_more_btn = tk.Label(list_header, text="+ إضافة", bg="white",
-                               fg="#3B82F6", font=(FONT_AR, 9, "bold"), cursor="hand2")
+        add_more_btn = tk.Label(list_header, text=t("add_more"), bg="white",
+                               fg="#3B82F6", font=(FONT_AR, fs(9), "bold"), cursor="hand2")
         add_more_btn.pack(side="left" if LANG=="ar" else "right")
 
         self.files_list_frame = tk.Frame(file_container, bg="white",
@@ -1190,9 +1287,9 @@ class WameedApp:
             if not self.selected_files:
                 empty_frame = tk.Frame(self.files_inner, bg="white")
                 empty_frame.pack(expand=True, fill="both")
-                tk.Label(empty_frame, text="📭", font=(FONT_AR, 20), bg="white", fg="#CBD5E1").pack(pady=(15, 2))
-                tk.Label(empty_frame, text="لم يتم اختيار ملفات بعد",
-                        bg="white", fg="#94A3B8", font=(FONT_AR, 10)).pack()
+                tk.Label(empty_frame, text="📭", font=(FONT_AR, fs(20)), bg="white", fg="#CBD5E1").pack(pady=(15, 2))
+                tk.Label(empty_frame, text=t("no_files_selected"),
+                        bg="white", fg="#94A3B8", font=(FONT_AR, fs(10))).pack()
                 return
 
             for idx, path in enumerate(self.selected_files):
@@ -1204,15 +1301,15 @@ class WameedApp:
                 f_row = tk.Frame(self.files_inner, bg="#FAFAFA", pady=6, padx=10)
                 f_row.pack(fill="x", pady=2, padx=4)
 
-                tk.Label(f_row, text=icon, bg="#FAFAFA", font=(FONT_AR, 14)).pack(
+                tk.Label(f_row, text=icon, bg="#FAFAFA", font=(FONT_AR, fs(14))).pack(
                     side="right" if LANG=="ar" else "left")
 
                 info_frame = tk.Frame(f_row, bg="#FAFAFA")
                 info_frame.pack(side="right" if LANG=="ar" else "left", fill="x", expand=True, padx=8)
-                tk.Label(info_frame, text=fname, bg="#FAFAFA", font=(FONT_AR, 10),
+                tk.Label(info_frame, text=fname, bg="#FAFAFA", font=(FONT_AR, fs(10)),
                         anchor="e" if LANG=="ar" else "w").pack(fill="x")
                 tk.Label(info_frame, text=size_str, bg="#FAFAFA", fg="#94A3B8",
-                        font=(FONT_AR, 8), anchor="e" if LANG=="ar" else "w").pack(fill="x")
+                        font=(FONT_AR, fs(8)), anchor="e" if LANG=="ar" else "w").pack(fill="x")
 
                 def remove_f(i=idx):
                     removed_file = self.selected_files.pop(i)
@@ -1220,7 +1317,7 @@ class WameedApp:
                     update_file_list_ui()
 
                 tk.Button(f_row, text="✕", command=remove_f, bg="#FAFAFA", fg="#EF4444",
-                         bd=0, cursor="hand2", font=(FONT_AR, 10)).pack(
+                         bd=0, cursor="hand2", font=(FONT_AR, fs(10))).pack(
                     side="left" if LANG=="ar" else "right", padx=5)
 
         def on_add_click(event=None):
@@ -1251,8 +1348,8 @@ class WameedApp:
 
         text_header = tk.Frame(text_container, bg="white")
         text_header.pack(fill="x", pady=(0, 8))
-        tk.Label(text_header, text="✏️ اكتب أو الصق النص هنا:",
-                bg="white", font=(FONT_AR, 10, "bold"), fg="#475569").pack(
+        tk.Label(text_header, text=t("text_input_hint"),
+                bg="white", font=(FONT_AR, fs(10), "bold"), fg="#475569").pack(
                     side="right" if LANG=="ar" else "left")
 
         # صندوق النص بتصميم أنيق
@@ -1260,7 +1357,7 @@ class WameedApp:
                              highlightthickness=1, highlightbackground="#E2E8F0")
         text_frame.pack(fill="both", expand=True)
 
-        self.send_text_area = tk.Text(text_frame, font=(FONT_AR, 12), wrap="word",
+        self.send_text_area = tk.Text(text_frame, font=(FONT_AR, fs(12)), wrap="word",
                                 bd=0, relief="flat", padx=16, pady=14,
                                 bg="#F8FAFC", fg="#1E293B",
                                 insertbackground="#2E7D32", insertwidth=2,
@@ -1298,14 +1395,14 @@ class WameedApp:
             logger.info("Text area cleared by user")
             self.send_text_area.delete("1.0", "end")
 
-        tk.Button(text_tools, text="📋 لصق من الحافظة", command=paste_now,
+        tk.Button(text_tools, text=t("paste_clipboard"), command=paste_now,
                  bg="#F1F5F9", fg="#475569", bd=0, pady=6, padx=15,
-                 cursor="hand2", font=(FONT_AR, 9)).pack(
+                 cursor="hand2", font=(FONT_AR, fs(9))).pack(
                      side="right" if LANG=="ar" else "left")
-        tk.Button(text_tools, text="✕ مسح الكل",
+        tk.Button(text_tools, text=t("clear_all"),
                  command=clear_now,
                  bg="#FEF2F2", fg="#991B1B", bd=0, pady=6, padx=15,
-                 cursor="hand2", font=(FONT_AR, 9)).pack(
+                 cursor="hand2", font=(FONT_AR, fs(9))).pack(
                      side="right" if LANG=="ar" else "left", padx=10)
 
     def _handle_multi_drop(self, event, callback):
@@ -1327,7 +1424,7 @@ class WameedApp:
 
     def _show_inline_message(self, window, message, color="#2E7D32", duration=2500):
         """عرض رسالة تنبيه داخلية بدلاً من messagebox"""
-        msg_label = tk.Label(window, text=message, bg=color, fg="white", font=(FONT_AR, 10, "bold"), pady=10)
+        msg_label = tk.Label(window, text=message, bg=color, fg="white", font=(FONT_AR, fs(10), "bold"), pady=10)
         msg_label.pack(fill="x", side="bottom")
 
         # تلاشي تدريجي أو إغلاق بعد مدة
@@ -1372,7 +1469,7 @@ class WameedApp:
                                 logger.info(f"جاري إرسال ({idx+1}/{total_files}): {fname}")
                                 start_time = time.time()
 
-                                window.after(0, lambda i=idx, n=fname: self.progress_label.config(text=f"إرسال ({i+1}/{total_files}): {n}"))
+                                window.after(0, lambda i=idx, n=fname: self.progress_label.config(text=t("sending_file").format(idx=i+1, total=total_files, name=n)))
 
                                 # تقليل حجم الـ Chunk إلى 512KB لتفادي خطأ Semaphore timeout (WinError 121)
                                 chunk_size = 512 * 1024
@@ -1399,7 +1496,7 @@ class WameedApp:
 
                                         if final_resp.get("status") == "saving":
                                             logger.info(f"الهاتف يقوم بحفظ الملف {fname}...")
-                                            window.after(0, lambda n=fname: self.progress_label.config(text=f"جاري الحفظ: {n}..."))
+                                            window.after(0, lambda n=fname: self.progress_label.config(text=t("saving_file").format(name=n)))
                                             continue
 
                                         if final_resp.get("status") == "saved": break
@@ -1422,21 +1519,24 @@ class WameedApp:
 
                     except (ConnectionRefusedError, OSError) as e:
                         if attempt < max_retries - 1:
-                            logger.warning(f"فشل الاتصال (محاولة {attempt+1}/{max_retries})... قد يكون التطبيق مغلقاً. إعادة المحاولة خلال {retry_delay} ثانية")
-                            window.after(0, lambda a=attempt+1: self.progress_label.config(text=f"إعادة محاولة الاتصال ({a}/{max_retries})... افتح التطبيق"))
+                            logger.warning(f"🔄 فشل الاتصال بـ {ip} (محاولة {attempt+1}/{max_retries}): {type(e).__name__}: {e}")
+                            window.after(0, lambda a=attempt+1: self.progress_label.config(text=t("retry_connect").format(attempt=a, max=max_retries)))
                             await asyncio.sleep(retry_delay)
                         else:
+                            logger.error(f"❌ فشل نهائي بعد {max_retries} محاولات للاتصال بـ {ip}: {e}")
                             raise e
                     except Exception as e:
+                        logger.error(f"❌ خطأ غير متوقع أثناء الإرسال إلى {ip}: {type(e).__name__}: {e}")
                         raise e
 
             except Exception as e:
-                logger.error(f"خطأ في إرسال الملفات: {e}")
+                logger.error(f"❌ خطأ في إرسال الملفات إلى {ip}: {type(e).__name__}: {e}")
                 error_msg = str(e)
-                if "121" in error_msg: error_msg = "خطأ في الشبكة (Timeout)"
-                elif "1225" in error_msg: error_msg = "الهاتف رفض الاتصال - تأكد من فتح التطبيق"
+                if "121" in error_msg: error_msg = "خطأ في الشبكة (Timeout) - تحقق من اتصال WiFi"
+                elif "1225" in error_msg or "ConnectionRefused" in type(e).__name__: error_msg = "الهاتف رفض الاتصال - تأكد من فتح التطبيق وتفعيل الاستقبال"
                 elif "unexpected keyword argument 'connect_timeout'" in error_msg: error_msg = "خطأ داخلي في مكتبة الاتصال"
-                else: error_msg = f"فشل الإرسال: {error_msg[:50]}"
+                elif "timed out" in error_msg.lower() or "timeout" in error_msg.lower(): error_msg = "انتهت مهلة الاتصال - الجهاز لا يستجيب"
+                else: error_msg = f"فشل الإرسال: {error_msg[:80]}"
 
                 window.after(0, lambda m=error_msg: self._show_inline_message(window, f"❌ {m}", "#EF4444"))
                 window.after(0, lambda: btn.config(state="normal", text=t("send_now"), bg="#2E7D32"))
@@ -1516,7 +1616,12 @@ class WameedApp:
 
     def toggle_auto_open(self):
         state["auto_open"] = self.auto_open_var.get()
-        logger.info(f"تغيير خيار الفتح التلقائي إلى: {state['auto_open']}")
+        logger.info(f"⚙️ فتح الملفات تلقائياً: {state['auto_open']}")
+        save_config()
+
+    def toggle_auto_open_folder(self):
+        state["auto_open_folder"] = self.auto_open_folder_var.get()
+        logger.info(f"⚙️ فتح المجلد تلقائياً: {state['auto_open_folder']}")
         save_config()
 
     def refresh_devices_list(self):
@@ -1623,19 +1728,19 @@ class WameedApp:
         device_info = tk.Frame(device_row, bg="#F0FFF4")
         device_info.pack(side="right" if LANG=="ar" else "left", fill="x", expand=True)
         tk.Label(device_info, text=device_name, bg="#F0FFF4",
-                font=(FONT_AR, 13, "bold"), fg="#166534").pack(
+                font=(FONT_AR, fs(13), "bold"), fg="#166534").pack(
                     anchor="e" if LANG=="ar" else "w")
         tk.Label(device_info, text="يطلب الإذن بالاتصال", bg="#F0FFF4",
-                font=(FONT_AR, 9), fg="#4B5563").pack(
+                font=(FONT_AR, fs(9)), fg="#4B5563").pack(
                     anchor="e" if LANG=="ar" else "w")
 
         tk.Label(content, text=t("pairing_msg").format(name=device_name),
-                 bg="white", font=(FONT_AR, 10), fg="#475569", wraplength=400).pack(pady=(0, 4))
+                 bg="white", font=(FONT_AR, fs(10)), fg="#475569", wraplength=400).pack(pady=(0, 4))
 
         # عداد تنازلي (30 ثانية) — يُرفض تلقائياً
         countdown_var = tk.IntVar(value=30)
         countdown_label = tk.Label(content, text="⏱ ينتهي خلال 30 ثانية",
-                                  bg="white", fg="#9CA3AF", font=(FONT_AR, 8))
+                                  bg="white", fg="#9CA3AF", font=(FONT_AR, fs(8)))
         countdown_label.pack()
 
         def tick():
@@ -1666,12 +1771,12 @@ class WameedApp:
             dialog.destroy()
 
         tk.Button(btn_frame, text=f"✗ {t('reject')}", command=reject,
-                  bg="#FEE2E2", fg="#991B1B", font=(FONT_AR, 10, "bold"),
+                  bg="#FEE2E2", fg="#991B1B", font=(FONT_AR, fs(10), "bold"),
                   bd=0, pady=10, padx=24, cursor="hand2",
                   activebackground="#FECACA").pack(side="left", padx=5, fill="x", expand=True)
 
         tk.Button(btn_frame, text=f"✓ {t('accept')}", command=approve,
-                  bg="#2E7D32", fg="white", font=(FONT_AR, 10, "bold"),
+                  bg="#2E7D32", fg="white", font=(FONT_AR, fs(10), "bold"),
                   bd=0, pady=10, padx=24, cursor="hand2",
                   activebackground="#1B5E20", activeforeground="white").pack(side="right", padx=5, fill="x", expand=True)
 
@@ -1695,8 +1800,11 @@ class WameedApp:
 
 # ======================== Receiver Logic ========================
 async def handle_client(websocket, path=None):
+    global connected_device, last_connection_time, active_connections
     client_ip = websocket.remote_address[0]
-    logger.info(f"اتصال وارد من IP: {client_ip}")
+    # تتبع عدد الاتصالات النشطة من هذا الـ IP
+    active_connections[client_ip] = active_connections.get(client_ip, 0) + 1
+    logger.info(f"اتصال وارد من IP: {client_ip} (اتصالات نشطة: {active_connections[client_ip]})")
     try:
         async for message in websocket:
             try:
@@ -1713,7 +1821,6 @@ async def handle_client(websocket, path=None):
                         logger.info(f"تم قبول الاتصال تلقائياً: {device_name} (جهاز موثوق)")
                         await websocket.send(json.dumps({"status": "paired"}))
                         # تحديث الجهاز المتصل والسجل
-                        global connected_device
                         connected_device = {
                             "id": device_id,
                             "name": device_name,
@@ -1728,6 +1835,7 @@ async def handle_client(websocket, path=None):
                             app.root.after(0, lambda: app.home_ip_var.set(client_ip))
 
                         app.root.after(0, lambda: app.update_device_history(device_id, device_name))
+                        app.root.after(0, app._update_status_display)
                     else:
                         logger.info(f"جهاز غير معروف '{device_name}' يطلب الاقتران. بانتظار رد المستخدم...")
                         await websocket.send(json.dumps({"status": "pairing_required"}))
@@ -1758,6 +1866,7 @@ async def handle_client(websocket, path=None):
                                 app.root.after(0, lambda: app.home_ip_var.set(client_ip))
 
                             app.root.after(0, lambda: app.update_device_history(device_id, device_name))
+                            app.root.after(0, app._update_status_display)
                             await websocket.send(json.dumps({"status": "paired"}))
                         else:
                             logger.warning(f"تم رفض اقتران الجهاز: {device_name}")
@@ -1768,6 +1877,8 @@ async def handle_client(websocket, path=None):
                     logger.info(f"استلام نص من الهاتف (الطول: {len(text)} حرف)")
                     app.root.clipboard_clear()
                     app.root.clipboard_append(text)
+                    # ⚡ إرسال saved فوراً قبل الأعمال الثانوية
+                    await websocket.send(json.dumps({"status": "saved"}))
                     device_name = connected_device.get("name") if connected_device else "جهاز غير معروف"
                     app.add_to_history(f"نص: {text[:30]}...", "", device_name)
                     show_notification("Wameed - نص جديد", f"تم نسخ النص إلى الحافظة تلقائياً")
@@ -1775,14 +1886,14 @@ async def handle_client(websocket, path=None):
                         import winsound
                         winsound.MessageBeep(winsound.MB_OK)
                     except Exception: pass
-                    await websocket.send(json.dumps({"status": "saved"}))
 
                 elif mtype == "url":
                     url = data.get("url")
                     logger.info(f"استلام رابط من الهاتف: {url}")
+                    # ⚡ إرسال saved فوراً قبل الأعمال الثانوية
+                    await websocket.send(json.dumps({"status": "saved"}))
                     device_name = connected_device.get("name") if connected_device else "جهاز غير معروف"
                     app.add_to_history(f"رابط: {url[:40]}", "", device_name)
-                    await websocket.send(json.dumps({"status": "saved"}))
                     if state["auto_open"]: webbrowser.open(url)
 
                 elif mtype == "file_meta":
@@ -1805,41 +1916,48 @@ async def handle_client(websocket, path=None):
                             chunk = await websocket.recv()
                             f.write(chunk)
 
-                    # إخطار المرسل بأننا بدأنا عملية الحفظ النهائي (لتجنب مهلة الانتظار)
-                    await websocket.send(json.dumps({"status": "saving"}))
-
                     elapsed = time.time() - start_time
                     logger.info(f"تم استقبال الملف بنجاح: {filename} في {elapsed:.2f} ثانية")
 
+                    # ⚡ إرسال saved فوراً للهاتف قبل أي عمل آخر (لتقليل التأخير)
+                    await websocket.send(json.dumps({"status": "saved", "path": filepath}))
+
+                    # الأعمال الثانوية بعد الرد (لا تؤخر الهاتف)
                     device_name = connected_device.get("name") if connected_device else "جهاز غير معروف"
                     app.add_to_history(filename, filepath, device_name)
 
-                    # إرسال تنبيه ويندوز + صوت
                     show_notification("Wameed - ملف جديد", f"تم استلام {filename} بنجاح.")
                     try:
                         import winsound
                         winsound.MessageBeep(winsound.MB_OK)
                     except Exception: pass
 
-                    await websocket.send(json.dumps({"status": "saved", "path": filepath}))
-
-                    # تنفيذ تعليمات العرض (Instant Open / Windows Notification)
-                    if state["auto_open"]:
-                        try:
-                            if display_mode == "open":
-                                os.startfile(filepath)
-                            elif display_mode == "path":
-                                os.startfile(os.path.dirname(filepath))
-                            elif display_mode == "both":
-                                os.startfile(filepath)
-                                os.startfile(os.path.dirname(filepath))
-                        except Exception as e:
-                            logger.error(f"خطأ أثناء فتح الملف/المجلد: {e}")
+                    # تنفيذ تعليمات العرض حسب إعدادات المستخدم
+                    try:
+                        if state.get("auto_open"):
+                            os.startfile(filepath)
+                        if state.get("auto_open_folder"):
+                            os.startfile(os.path.dirname(filepath))
+                    except Exception as e:
+                        logger.error(f"خطأ أثناء فتح الملف/المجلد: {e}")
 
             except Exception as e:
                 logger.exception("حدث خطأ أثناء معالجة رسالة العميل")
     except Exception as e:
-        logger.error(f"انقطع الاتصال مع الهاتف ({client_ip}): {e}")
+        logger.debug(f"انتهى اتصال WebSocket مع ({client_ip}): {e}")
+
+    # تقليل عدّاد الاتصالات النشطة
+    active_connections[client_ip] = max(0, active_connections.get(client_ip, 1) - 1)
+    remaining = active_connections.get(client_ip, 0)
+    logger.debug(f"إغلاق اتصال من {client_ip} (متبقي: {remaining})")
+
+    # مسح حالة الجهاز فقط إذا لم يتبقَّ أي اتصال نشط من نفس الـ IP
+    if remaining == 0 and connected_device and connected_device.get("ip") == client_ip:
+        logger.info(f"📴 تم قطع جميع الاتصالات مع {connected_device.get('name', '?')} ({client_ip})")
+        last_connection_time = datetime.now()
+        connected_device = None
+        if hasattr(app, 'root'):
+            app.root.after(0, app._update_status_display)
 
 def show_notification(title, message):
     """إرسال تنبيه ويندوز حديث (Toast) يظهر في مركز الإشعارات"""

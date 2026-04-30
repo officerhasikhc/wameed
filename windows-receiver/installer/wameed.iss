@@ -5,7 +5,7 @@
 
 #define AppName        "Wameed"
 #define AppNameAr      "وميض"
-#define AppVersion     "1.6.0"
+#define AppVersion     "1.7.0"
 #define AppPublisher   "Wameed Project"
 #define AppExe         "Wameed.exe"
 #define AppURL         "https://github.com/"

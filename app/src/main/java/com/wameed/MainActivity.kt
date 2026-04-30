@@ -487,27 +487,28 @@ fun MainScreen(sender: WameedSender, discovery: DeviceDiscovery, updateManager: 
         },
         bottomBar = {
             NavigationBar(containerColor = Color.White) {
+                val tabNames = arrayOf("الاتصال", "السجل", "المستلم", "الإعدادات")
                 NavigationBarItem(
                     selected = selectedTab == 0,
-                    onClick = { selectedTab = 0 },
+                    onClick = { selectedTab = 0; Log.i("Wameed", "📄 انتقال إلى: ${tabNames[0]}") },
                     icon = { Icon(Icons.Default.Home, null) },
                     label = { Text(stringResource(R.string.tab_connection)) }
                 )
                 NavigationBarItem(
                     selected = selectedTab == 1,
-                    onClick = { selectedTab = 1 },
+                    onClick = { selectedTab = 1; Log.i("Wameed", "📄 انتقال إلى: ${tabNames[1]}") },
                     icon = { Icon(Icons.AutoMirrored.Filled.List, null) },
                     label = { Text(stringResource(R.string.tab_history)) }
                 )
                 NavigationBarItem(
                     selected = selectedTab == 2,
-                    onClick = { selectedTab = 2 },
+                    onClick = { selectedTab = 2; Log.i("Wameed", "📄 انتقال إلى: ${tabNames[2]}") },
                     icon = { Icon(Icons.Default.Download, null) },
                     label = { Text(stringResource(R.string.tab_received)) }
                 )
                 NavigationBarItem(
                     selected = selectedTab == 3,
-                    onClick = { selectedTab = 3 },
+                    onClick = { selectedTab = 3; Log.i("Wameed", "📄 انتقال إلى: ${tabNames[3]}") },
                     icon = { Icon(Icons.Default.Settings, null) },
                     label = { Text(stringResource(R.string.tab_settings)) }
                 )

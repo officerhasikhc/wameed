@@ -1,14 +1,14 @@
 {
   "android": {
-    "versionCode": 6,
-    "versionName": "1.6.0",
-    "updateUrl": "https://github.com/officerhasikhc/wameed/releases/download/1.6.0/Wameed-Android.apk",
+    "versionCode": 7,
+    "versionName": "1.7.0",
+    "updateUrl": "https://github.com/officerhasikhc/wameed/releases/download/1.7.0/Wameed-Android.apk",
     "isForceUpdate": false,
     "releaseNotes": "تحديث جديد يتضمن ميزات النقل السريع وإصلاحات الأخطاء."
   },
   "windows": {
-    "version": "1.6.0",
-    "updateUrl": "https://github.com/officerhasikhc/wameed/releases/download/1.6.0/WameedSetup-1.6.0.exe",
+    "version": "1.7.0",
+    "updateUrl": "https://github.com/officerhasikhc/wameed/releases/download/1.7.0/WameedSetup-1.7.0.exe",
     "releaseNotes": "تحسينات في واجهة المستخدم ودعم التحديثات التلقائية."
   }
 }

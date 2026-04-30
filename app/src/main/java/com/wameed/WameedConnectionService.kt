@@ -68,7 +68,7 @@ class WameedConnectionService : Service() {
 
     private val httpClient: OkHttpClient by lazy {
         OkHttpClient.Builder()
-            .connectTimeout(3, TimeUnit.SECONDS)
+            .connectTimeout(1500, TimeUnit.MILLISECONDS)
             .readTimeout(60, TimeUnit.SECONDS)
             .writeTimeout(10, TimeUnit.SECONDS)
             .pingInterval(20, TimeUnit.SECONDS)
@@ -398,6 +398,8 @@ class WameedConnectionService : Service() {
                 webSocket.send(hello.toString())
                 pingFailures = 0
                 WameedEvents.tryEmit(WameedEvent.ServiceStatus(true, pcDisplay))
+                // ⚡ فتح اتصال دائم للإرسال الفوري
+                WameedSender.openPersistent(this@WameedConnectionService)
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {

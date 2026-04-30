@@ -4,6 +4,7 @@ import android.app.Activity
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
+import android.util.Log
 import android.view.Gravity
 import android.view.WindowManager
 import android.widget.*
@@ -93,6 +94,8 @@ class ShareActivity : Activity() {
     private fun handleIntent(intent: Intent) {
         val action = intent.action ?: return
 
+        Log.i("Wameed", "📤 فتح شاشة المشاركة | action=$action type=${intent.type}")
+
         if (action == Intent.ACTION_SEND) {
             val mimeType = intent.type ?: ""
 
@@ -100,16 +103,20 @@ class ShareActivity : Activity() {
                 mimeType == "text/plain" -> {
                     val text = intent.getStringExtra(Intent.EXTRA_TEXT) ?: ""
                     if (text.isNotEmpty()) {
+                        Log.i("Wameed", "📤 مشاركة نص (الطول: ${text.length})")
                         sendText(text)
                     } else {
+                        Log.w("Wameed", "⚠️ مشاركة فارغة: لا يوجد محتوى")
                         showError(getString(R.string.error_no_content))
                     }
                 }
                 else -> {
                     val uri = IntentCompat.getParcelableExtra(intent, Intent.EXTRA_STREAM, Uri::class.java)
                     if (uri != null) {
+                        Log.i("Wameed", "📤 مشاركة ملف | mime=$mimeType")
                         sendFile(uri)
                     } else {
+                        Log.w("Wameed", "⚠️ مشاركة فاشلة: لا يوجد ملف")
                         showError(getString(R.string.error_no_file))
                     }
                 }
@@ -119,8 +126,10 @@ class ShareActivity : Activity() {
                 intent, Intent.EXTRA_STREAM, Uri::class.java
             )
             if (!uris.isNullOrEmpty()) {
+                Log.i("Wameed", "📤 مشاركة ${uris.size} ملفات")
                 sendMultipleFiles(uris)
             } else {
+                Log.w("Wameed", "⚠️ مشاركة فاشلة: لا توجد ملفات")
                 showError(getString(R.string.error_no_files))
             }
         }
@@ -134,6 +143,7 @@ class ShareActivity : Activity() {
 
         sender.sendText(text, object : WameedSender.SendCallback {
             override fun onSuccess(message: String) {
+                Log.i("Wameed", "✅ تم إرسال النص بنجاح")
                 WameedPrefs.addHistoryEntry(this@ShareActivity, label, type,
                     text.toByteArray().size.toLong(), "success")
                 runOnUiThread {
@@ -144,6 +154,7 @@ class ShareActivity : Activity() {
             }
 
             override fun onError(error: String) {
+                Log.e("Wameed", "❌ فشل إرسال النص: $error")
                 WameedPrefs.addHistoryEntry(this@ShareActivity, label, type,
                     text.toByteArray().size.toLong(), "error")
                 runOnUiThread { showError(error) }
@@ -174,6 +185,7 @@ class ShareActivity : Activity() {
     }
 
     private fun sendFile(uri: Uri) {
+        Log.i("Wameed", "📤 بدء إرسال ملف: $uri")
         val mimeType = contentResolver.getType(uri) ?: ""
         val typeLabel = when {
             mimeType.startsWith("image/") -> getString(R.string.label_image)
@@ -188,6 +200,7 @@ class ShareActivity : Activity() {
 
         sender.sendFile(uri, object : WameedSender.SendCallback {
             override fun onSuccess(message: String) {
+                Log.i("Wameed", "✅ تم إرسال الملف $filename بنجاح")
                 WameedPrefs.addHistoryEntry(this@ShareActivity, filename, mimeType, fileSize, "success")
                 runOnUiThread {
                     statusText.text = getString(R.string.success_message, message)
@@ -197,6 +210,7 @@ class ShareActivity : Activity() {
             }
 
             override fun onError(error: String) {
+                Log.e("Wameed", "❌ فشل إرسال الملف $filename: $error")
                 WameedPrefs.addHistoryEntry(this@ShareActivity, filename, mimeType, fileSize, "error")
                 runOnUiThread { showError(error) }
             }

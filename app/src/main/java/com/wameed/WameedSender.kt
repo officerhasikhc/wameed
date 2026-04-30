@@ -22,11 +22,22 @@ class WameedSender(private val context: Context) {
     companion object {
         // محرك اتصال واحد لسرعة البرق — مهلات كبيرة للملفات الضخمة
         private val client = OkHttpClient.Builder()
-            .connectTimeout(3, TimeUnit.SECONDS)
+            .connectTimeout(1500, TimeUnit.MILLISECONDS)
             .readTimeout(10, TimeUnit.MINUTES)
             .writeTimeout(10, TimeUnit.MINUTES)
             .pingInterval(15, TimeUnit.SECONDS)
             .build()
+
+        // ⚡ Persistent WebSocket — اتصال دائم للإرسال الفوري
+        @Volatile
+        private var persistentWs: WebSocket? = null
+        @Volatile
+        private var persistentPaired = false
+        @Volatile
+        private var persistentIp: String = ""
+        @Volatile
+        private var persistentPort: Int = 0
+        private val persistentLock = Any()
 
         /** Fast TCP reachability check before opening a WebSocket. */
         private fun isTcpReachable(ip: String, port: Int, timeoutMs: Int = 800): Boolean {
@@ -45,6 +56,99 @@ class WameedSender(private val context: Context) {
             return try {
                 java.net.InetAddress.getByName(ip).isReachable(timeoutMs)
             } catch (_: Exception) { false }
+        }
+
+        // ======================== Persistent WebSocket ========================
+
+        /** فتح اتصال دائم مع الكمبيوتر (يُستدعى بعد أول اقتران ناجح) */
+        fun openPersistent(context: Context) {
+            val ip = WameedPrefs.getPcIp(context)
+            val port = WameedPrefs.getPcPort(context)
+            if (ip.isEmpty()) return
+
+            synchronized(persistentLock) {
+                // إذا الاتصال قائم ونفس العنوان، لا نعيد الفتح
+                if (persistentWs != null && persistentIp == ip && persistentPort == port) return
+                // أغلق القديم
+                closePersistent()
+
+                persistentIp = ip
+                persistentPort = port
+                persistentPaired = false
+
+                val wsUrl = "ws://$ip:$port"
+                Log.i("WameedSender", "⚡ فتح اتصال دائم: $wsUrl")
+                val request = Request.Builder().url(wsUrl).build()
+                persistentWs = client.newWebSocket(request, object : WebSocketListener() {
+                    override fun onOpen(webSocket: WebSocket, response: Response) {
+                        Log.i("WameedSender", "⚡ Persistent WS مفتوح، إرسال hello")
+                        val hello = JSONObject().apply {
+                            put("type", "hello")
+                            put("device", WameedPrefs.getDeviceName())
+                            put("device_id", WameedPrefs.getOrCreateDeviceId(context))
+                            put("app_version", BuildConfig.VERSION_NAME)
+                        }
+                        webSocket.send(hello.toString())
+                    }
+
+                    override fun onMessage(webSocket: WebSocket, text: String) {
+                        try {
+                            val resp = JSONObject(text)
+                            when (resp.optString("status")) {
+                                "paired", "hello" -> {
+                                    persistentPaired = true
+                                    Log.i("WameedSender", "⚡ Persistent WS مقترن وجاهز")
+                                }
+                                "rejected" -> {
+                                    Log.w("WameedSender", "⚡ Persistent WS مرفوض")
+                                    closePersistent()
+                                }
+                            }
+                        } catch (_: Exception) {}
+                    }
+
+                    override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                        Log.w("WameedSender", "⚡ Persistent WS فشل: ${t.message}")
+                        synchronized(persistentLock) {
+                            persistentWs = null
+                            persistentPaired = false
+                        }
+                    }
+
+                    override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+                        Log.i("WameedSender", "⚡ Persistent WS أُغلق: $reason")
+                        synchronized(persistentLock) {
+                            persistentWs = null
+                            persistentPaired = false
+                        }
+                    }
+                })
+            }
+        }
+
+        /** إغلاق الاتصال الدائم */
+        fun closePersistent() {
+            synchronized(persistentLock) {
+                try { persistentWs?.close(1000, null) } catch (_: Exception) {}
+                persistentWs = null
+                persistentPaired = false
+                persistentIp = ""
+                persistentPort = 0
+            }
+        }
+
+        /** هل الاتصال الدائم جاهز؟ */
+        fun isPersistentReady(): Boolean = persistentWs != null && persistentPaired
+
+        /** إرسال نص/رابط عبر الاتصال الدائم (فوري — بدون handshake) */
+        fun sendViaPersistent(payload: String): Boolean {
+            synchronized(persistentLock) {
+                val ws = persistentWs ?: return false
+                if (!persistentPaired) return false
+                return try {
+                    ws.send(payload)
+                } catch (_: Exception) { false }
+            }
         }
     }
 
@@ -71,8 +175,6 @@ class WameedSender(private val context: Context) {
     }
 
     fun sendPing(callback: SendCallback) {
-        // فتح WebSocket حقيقي والانتظار حتى اكتمال الاقتران
-        // هذا يضمن أن الهاتف لا يظهر "متصل" أثناء انتظار موافقة الاقتران
         val ip = WameedPrefs.getPcIp(context)
         val port = WameedPrefs.getPcPort(context)
 
@@ -84,108 +186,120 @@ class WameedSender(private val context: Context) {
             return
         }
 
-        Thread {
-            // أولاً: التحقق السريع من TCP
-            Log.d(TAG, "فحص TCP السريع لـ $ip:$port...")
-            if (!isTcpReachable(ip, port, 1500)) {
-                Log.w(TAG, "جهاز $ip غير متاح عبر TCP")
-                callback.onError(context.getString(R.string.status_pc_unavailable))
-                return@Thread
+        // ⚡ إذا الاتصال الدائم جاهز، نجاح فوري
+        if (isPersistentReady()) {
+            Log.i(TAG, "⚡ الاتصال الدائم جاهز — Ping فوري")
+            markSendSuccess()
+            callback.onSuccess(context.getString(R.string.status_connected))
+            return
+        }
+
+        // فتح WebSocket مباشرة (بدون TCP check — connectTimeout يكفي)
+        val wsUrl = WameedPrefs.getWsUrl(context)
+        val request = Request.Builder().url(wsUrl).build()
+
+        val finishedFlag = java.util.concurrent.atomic.AtomicBoolean(false)
+        val lastProgressMs = java.util.concurrent.atomic.AtomicLong(System.currentTimeMillis())
+
+        // Watchdog للاقتران: 3 دقائق
+        val pairingTimeoutMs = 3 * 60_000L
+        val watchdogThread = Thread {
+            try {
+                while (!finishedFlag.get()) {
+                    val idle = System.currentTimeMillis() - lastProgressMs.get()
+                    if (idle > pairingTimeoutMs) {
+                        if (finishedFlag.compareAndSet(false, true)) {
+                            Log.e(TAG, "انتهت مهلة الاقتران (Timeout) لـ $ip")
+                            callback.onError(context.getString(R.string.error_pairing_timeout))
+                        }
+                        break
+                    }
+                    Thread.sleep(1000)
+                }
+            } catch (_: InterruptedException) { }
+        }.apply { isDaemon = true; start() }
+
+        client.newWebSocket(request, object : WebSocketListener() {
+            override fun onOpen(webSocket: WebSocket, response: Response) {
+                Log.i(TAG, "تم فتح WebSocket لـ $ip، إرسال تحية 'hello'...")
+                lastProgressMs.set(System.currentTimeMillis())
+                val hello = JSONObject().apply {
+                    put("type", "hello")
+                    put("device", WameedPrefs.getDeviceName())
+                    put("device_id", WameedPrefs.getOrCreateDeviceId(context))
+                    put("app_version", BuildConfig.VERSION_NAME)
+                }
+                webSocket.send(hello.toString())
             }
-            Log.d(TAG, "اتصال TCP ناجح، جاري فتح WebSocket...")
 
-            // ثانياً: فتح WebSocket والانتظار حتى paired
-            val wsUrl = WameedPrefs.getWsUrl(context)
-            val request = Request.Builder().url(wsUrl).build()
+            override fun onMessage(webSocket: WebSocket, text: String) {
+                Log.v(TAG, "استلام رسالة من $ip: $text")
+                lastProgressMs.set(System.currentTimeMillis())
+                if (finishedFlag.get()) return
 
-            val finishedFlag = java.util.concurrent.atomic.AtomicBoolean(false)
-            val lastProgressMs = java.util.concurrent.atomic.AtomicLong(System.currentTimeMillis())
-
-            // Watchdog للاقتران: 3 دقائق (نافذة الاقتران قد تكون خلف نوافذ أخرى)
-            val pairingTimeoutMs = 3 * 60_000L
-            val watchdogThread = Thread {
                 try {
-                    while (!finishedFlag.get()) {
-                        val idle = System.currentTimeMillis() - lastProgressMs.get()
-                        if (idle > pairingTimeoutMs) {
+                    val resp = JSONObject(text)
+                    when (resp.optString("status")) {
+                        "pairing_required" -> {
+                            Log.i(TAG, "الكمبيوتر يطلب الاقتران (Pairing Required)")
+                            callback.onInfo(context.getString(R.string.status_waiting_for_approval))
+                        }
+                        "paired", "hello" -> {
+                            Log.i(TAG, "✅ تم الاتصال بنجاح مع $ip")
                             if (finishedFlag.compareAndSet(false, true)) {
-                                Log.e(TAG, "انتهت مهلة الاقتران (Timeout) لـ $ip")
-                                callback.onError(context.getString(R.string.error_pairing_timeout))
-                            }
-                            break
-                        }
-                        Thread.sleep(1000)
-                    }
-                } catch (_: InterruptedException) { }
-            }.apply { isDaemon = true; start() }
-
-            client.newWebSocket(request, object : WebSocketListener() {
-                override fun onOpen(webSocket: WebSocket, response: Response) {
-                    Log.i(TAG, "تم فتح WebSocket لـ $ip، إرسال تحية 'hello'...")
-                    lastProgressMs.set(System.currentTimeMillis())
-                    val hello = JSONObject().apply {
-                        put("type", "hello")
-                        put("device", WameedPrefs.getDeviceName())
-                        put("device_id", WameedPrefs.getOrCreateDeviceId(context))
-                        put("app_version", BuildConfig.VERSION_NAME)
-                    }
-                    webSocket.send(hello.toString())
-                }
-
-                override fun onMessage(webSocket: WebSocket, text: String) {
-                    Log.v(TAG, "استلام رسالة من $ip: $text")
-                    lastProgressMs.set(System.currentTimeMillis())
-                    if (finishedFlag.get()) return
-
-                    try {
-                        val resp = JSONObject(text)
-                        when (resp.optString("status")) {
-                            "pairing_required" -> {
-                                Log.i(TAG, "الكمبيوتر يطلب الاقتران (Pairing Required)")
-                                callback.onInfo(context.getString(R.string.status_waiting_for_approval))
-                            }
-                            "paired", "hello" -> {
-                                Log.i(TAG, "✅ تم الاتصال بنجاح مع $ip")
-                                if (finishedFlag.compareAndSet(false, true)) {
-                                    markSendSuccess()
-                                    callback.onSuccess(context.getString(R.string.status_connected))
-                                    webSocket.close(1000, null)
-                                }
-                            }
-                            "rejected" -> {
-                                Log.w(TAG, "❌ الكمبيوتر رفض الاتصال")
-                                if (finishedFlag.compareAndSet(false, true)) {
-                                    val msg = resp.optString("message",
-                                        context.getString(R.string.error_pairing_rejected))
-                                    callback.onError(msg)
-                                    webSocket.close(1000, null)
-                                }
+                                markSendSuccess()
+                                callback.onSuccess(context.getString(R.string.status_connected))
+                                webSocket.close(1000, null)
+                                // ⚡ فتح اتصال دائم بعد الاقتران الناجح
+                                openPersistent(context)
                             }
                         }
-                    } catch (_: Exception) { }
-                }
-
-                override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                    if (finishedFlag.compareAndSet(false, true)) {
-                        val msg = when {
-                            t is java.net.ConnectException -> context.getString(R.string.error_connect_failed)
-                            t is java.net.SocketTimeoutException -> context.getString(R.string.error_socket_timeout)
-                            else -> context.getString(R.string.error_connection_dropped, t.message ?: "")
+                        "rejected" -> {
+                            Log.w(TAG, "❌ الكمبيوتر رفض الاتصال")
+                            if (finishedFlag.compareAndSet(false, true)) {
+                                val msg = resp.optString("message",
+                                    context.getString(R.string.error_pairing_rejected))
+                                callback.onError(msg)
+                                webSocket.close(1000, null)
+                            }
                         }
-                        callback.onError(msg)
                     }
+                } catch (_: Exception) { }
+            }
+
+            override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                if (finishedFlag.compareAndSet(false, true)) {
+                    val msg = when {
+                        t is java.net.ConnectException -> context.getString(R.string.error_connect_failed)
+                        t is java.net.SocketTimeoutException -> context.getString(R.string.error_socket_timeout)
+                        else -> context.getString(R.string.error_connection_dropped, t.message ?: "")
+                    }
+                    callback.onError(msg)
                 }
-            })
-        }.start()
+            }
+        })
     }
 
     fun sendText(text: String, callback: SendCallback) {
-        val wsUrl = WameedPrefs.getWsUrl(context)
         val isUrl = text.startsWith("http://") || text.startsWith("https://")
         val payload = JSONObject().apply {
             put("type", if (isUrl) "url" else "text")
             if (isUrl) put("url", text) else put("text", text)
         }
+
+        // ⚡ محاولة الإرسال الفوري عبر الاتصال الدائم
+        if (isPersistentReady()) {
+            Log.i(TAG, "⚡ إرسال فوري عبر الاتصال الدائم")
+            if (sendViaPersistent(payload.toString())) {
+                markSendSuccess()
+                callback.onSuccess(context.getString(R.string.status_sent))
+                return
+            }
+            Log.w(TAG, "⚡ فشل الإرسال الفوري، التراجع للطريقة العادية")
+        }
+
+        // Fallback: الطريقة القديمة
+        val wsUrl = WameedPrefs.getWsUrl(context)
         sendPayload(wsUrl, payload.toString(), callback)
     }
 
@@ -288,6 +402,8 @@ class WameedSender(private val context: Context) {
                         "paired", "hello" -> {
                             Log.i(TAG, "تم الاقتران بنجاح، البدء في إرسال الملفات")
                             paired = true
+                            // ⚡ فتح اتصال دائم للعمليات المستقبلية
+                            openPersistent(context)
                         }
                         "rejected" -> {
                             Log.w(TAG, "تم رفض طلب الاقتران من الكمبيوتر")
@@ -544,6 +660,8 @@ class WameedSender(private val context: Context) {
                         if (needsPairing && payloadSent.compareAndSet(false, true)) {
                             webSocket.send(payload)
                         }
+                        // ⚡ فتح اتصال دائم للعمليات المستقبلية
+                        openPersistent(context)
                     }
                     "saving" -> {
                         // Reset possible internal watchdog if we had one for single sends
