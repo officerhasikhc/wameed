@@ -14,6 +14,8 @@
     <string name="label_pdf">PDF</string>
     <string name="label_video">Video</string>
     <string name="label_file">File</string>
+    <string name="label_audio">Audio</string>
+    <string name="share_file_count">%d files</string>
     <string name="sending_type">Sending %s&#8230;</string>
     <string name="sending_type_speed">Sending %1$s (%2$s Mbps)&#8230;</string>
     <string name="sending_multiple">Sending %d files&#8230;</string>

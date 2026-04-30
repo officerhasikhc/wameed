@@ -1,0 +1,23 @@
+<!--
+  في AndroidManifest.xml عدّل ShareActivity هكذا:
+  
+  أضف هذه الخاصية:
+    android:theme="@style/Theme.Wameed.TransparentBottomSheet"
+  
+  وفي res/values/themes.xml أضف:
+-->
+
+<style name="Theme.Wameed.TransparentBottomSheet" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+    <item name="android:windowIsTranslucent">true</item>
+    <item name="android:windowBackground">@android:color/transparent</item>
+    <item name="android:backgroundDimEnabled">true</item>
+    <item name="android:backgroundDimAmount">0.5</item>
+    <item name="android:windowAnimationStyle">@null</item>
+    <item name="android:colorPrimary">@color/wameed_green</item>
+</style>
+
+<!--
+  في res/values/colors.xml أضف:
+-->
+<color name="wameed_green">#2E7D32</color>
+<color name="wameed_green_light">#43A047</color>

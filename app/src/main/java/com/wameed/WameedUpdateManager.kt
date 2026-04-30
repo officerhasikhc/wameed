@@ -4,6 +4,7 @@ import android.app.Activity
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.util.Log
 import androidx.compose.runtime.mutableFloatStateOf
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -47,14 +48,18 @@ class WameedUpdateManager private constructor(private val context: Context) {
      * @param isManual إذا كان البحث يدوياً من الإعدادات لإظهار حالة التحميل
      */
     suspend fun checkForUpdates(isManual: Boolean = false): Boolean {
+        Log.w("WameedUpdate", "▶ checkForUpdates(isManual=$isManual) started")
         if (isManual) _updateState.value = UpdateState.Checking
         
         return withContext(Dispatchers.IO) {
             try {
                 if (isManual) delay(800) // تأخير بسيط لراحة عين المستخدم
+                Log.w("WameedUpdate", "▶ Fetching: $UPDATE_JSON_URL")
                 val request = Request.Builder().url(UPDATE_JSON_URL).build()
                 client.newCall(request).execute().use { response ->
+                    Log.w("WameedUpdate", "▶ Response code: ${response.code}")
                     if (!response.isSuccessful) {
+                        Log.e("WameedUpdate", "✗ HTTP error: ${response.code} ${response.message}")
                         if (isManual) {
                             // إذا كان الملف غير موجود (404)، نعتبره "لا يوجد تحديث جديد" بدلاً من "فشل"
                             if (response.code == 404) {
@@ -76,6 +81,14 @@ class WameedUpdateManager private constructor(private val context: Context) {
                     val updateUrl = androidJson.getString("updateUrl")
                     val releaseNotes = androidJson.getString("releaseNotes")
                     
+                    Log.w("WameedUpdate", "══════════════════════════════════")
+                    Log.w("WameedUpdate", "LOCAL  versionCode = ${BuildConfig.VERSION_CODE}")
+                    Log.w("WameedUpdate", "LOCAL  versionName = ${BuildConfig.VERSION_NAME}")
+                    Log.w("WameedUpdate", "REMOTE versionCode = $remoteVersionCode")
+                    Log.w("WameedUpdate", "REMOTE updateUrl   = $updateUrl")
+                    Log.w("WameedUpdate", "RESULT: update available = ${remoteVersionCode > BuildConfig.VERSION_CODE}")
+                    Log.w("WameedUpdate", "══════════════════════════════════")
+                    
                     if (remoteVersionCode > BuildConfig.VERSION_CODE) {
                         pendingUpdateUrl = updateUrl
                         pendingReleaseNotes = releaseNotes
@@ -92,6 +105,7 @@ class WameedUpdateManager private constructor(private val context: Context) {
                     }
                 }
             } catch (e: Exception) {
+                Log.e("WameedUpdate", "✗ Exception during update check: ${e.javaClass.simpleName}: ${e.message}", e)
                 crashReporter.logError("Failed to check for GitHub updates", e)
                 if (isManual) {
                     _updateState.value = UpdateState.Failed(-1)

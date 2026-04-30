@@ -14,6 +14,8 @@
     <string name="label_pdf">الـ PDF</string>
     <string name="label_video">الفيديو</string>
     <string name="label_file">الملف</string>
+    <string name="label_audio">الصوت</string>
+    <string name="share_file_count">%d ملفات</string>
     <string name="sending_type">إرسال %s&#8230;</string>
     <string name="sending_type_speed">إرسال %1$s (%2$s Mbps)&#8230;</string>
     <string name="sending_multiple">إرسال %d ملفات&#8230;</string>

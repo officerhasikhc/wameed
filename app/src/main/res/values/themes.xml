@@ -20,4 +20,13 @@
         <item name="android:backgroundDimEnabled">false</item>
     </style>
 
+    <style name="Theme.Wameed.TransparentBottomSheet" parent="Theme.AppCompat.Light.NoActionBar">
+        <item name="android:windowIsTranslucent">true</item>
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:backgroundDimEnabled">true</item>
+        <item name="android:backgroundDimAmount">0.5</item>
+        <item name="android:windowAnimationStyle">@null</item>
+        <item name="android:colorPrimary">@color/wameed_green</item>
+    </style>
+
 </resources>

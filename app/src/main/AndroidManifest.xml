@@ -56,7 +56,7 @@
         <activity
             android:name=".ShareActivity"
             android:exported="true"
-            android:theme="@style/Theme.AppCompat.Translucent"
+            android:theme="@style/Theme.Wameed.TransparentBottomSheet"
             android:launchMode="singleTask">
 
             <intent-filter>

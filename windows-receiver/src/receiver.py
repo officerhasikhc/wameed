@@ -1,5 +1,6 @@
 import os
 import sys
+import atexit
 import logging
 import logging.handlers
 import socket
@@ -1599,12 +1600,77 @@ class WameedApp:
         asyncio.run(send_text_task())
 
     def setup_tray(self):
-        menu = (
-            item('فتح الواجهة', self.show_window, default=True),
-            item('إيقاف التشغيل', self.quit_app)
+        """
+        Tray Icon ديناميكي:
+        - tooltip يعرض IP + حالة الاتصال ويتحدث كل 15 ثانية
+        - قائمة تعرض اسم الجهاز المتصل تلقائياً
+        """
+        # إيقاف أيقونة سابقة إن وُجدت (يمنع التكرار)
+        if hasattr(self, "tray_icon") and self.tray_icon is not None:
+            try:
+                self.tray_icon.stop()
+            except Exception:
+                pass
+            self.tray_icon = None
+        def _status_text():
+            if connected_device and connected_device.get("name"):
+                name = connected_device["name"]
+                ip   = connected_device.get("ip", "")
+                return f"✅ متصل: {name} ({ip})"
+            elif last_connection_time:
+                mins = int((datetime.now() - last_connection_time).total_seconds() / 60)
+                return f"⚪ آخر اتصال: {mins} دقيقة"
+            return "⚪ غير متصل"
+
+        def on_open(icon, item):
+            self.root.after(0, self.show_window)
+
+        def on_send(icon, item):
+            if not state.get("target_ip"):
+                self.root.after(0, lambda: messagebox.showwarning(
+                    "وميض", t("no_device_connected_error")))
+                return
+            self.root.after(0, self._show_send_dialog)
+
+        def on_folder(icon, item):
+            try:
+                os.startfile(state["save_dir"])
+            except Exception as e:
+                logger.error(f"Tray folder: {e}")
+
+        def on_quit(icon, item):
+            self.quit_app()
+
+        menu = pystray.Menu(
+            item(lambda text: _status_text(), lambda i, it: None, enabled=False),
+            pystray.Menu.SEPARATOR,
+            item("📂 فتح وميض",        on_open,   default=True),
+            item("📤 إرسال ملف",       on_send),
+            item("📁 فتح مجلد الحفظ",  on_folder),
+            pystray.Menu.SEPARATOR,
+            item("⏹ إيقاف",            on_quit),
         )
-        self.tray_icon = pystray.Icon("wameed", self.tray_image, APP_NAME, menu)
-        threading.Thread(target=self.tray_icon.run, daemon=True).start()
+
+        self.tray_icon = pystray.Icon(
+            name  = "wameed",
+            icon  = self.tray_image,
+            title = f"وميض {VERSION} | {get_local_ip()}",
+            menu  = menu,
+        )
+
+        threading.Thread(target=self.tray_icon.run, daemon=True, name="WameedTray").start()
+
+        # تحديث tooltip كل 15 ثانية
+        def _tick():
+            if state["running"] and hasattr(self, "tray_icon"):
+                try:
+                    self.tray_icon.title = f"وميض | {get_local_ip()} | {_status_text()}"
+                except Exception:
+                    pass
+            if state["running"]:
+                self.root.after(15_000, _tick)
+        self.root.after(5_000, _tick)
+        logger.info("✅ Tray Icon بدأ")
 
     def browse_folder(self):
         path = filedialog.askdirectory(initialdir=state["save_dir"])
@@ -1682,11 +1748,13 @@ class WameedApp:
         self.root.after(0, self._build_devices)
 
     def show_window(self):
-        self.root.after(0, self.root.deiconify)
-        self.root.after(0, self.root.focus_force)
+        self.root.deiconify()
+        self.root.lift()
+        self.root.focus_force()
 
     def hide_window(self):
         self.root.withdraw()
+        show_notification(APP_NAME, "وميض يعمل في الخلفية ⚡")
 
     def show_pairing_dialog(self, device_name):
         """نافذة اقتران محسّنة - أيقونة جهاز + عداد تنازلي + صوت تنبيه"""
@@ -1791,8 +1859,18 @@ class WameedApp:
 
     def quit_app(self):
         state["running"] = False
-        self.tray_icon.stop()
-        self.root.quit()
+        try:
+            if hasattr(self, "tray_icon") and self.tray_icon is not None:
+                self.tray_icon.stop()
+                self.tray_icon = None
+        except Exception:
+            pass
+        try:
+            self.root.quit()
+        except Exception:
+            pass
+        # تأخير قصير يمنح Windows وقتاً لإزالة الأيقونة من الـ tray
+        time.sleep(0.3)
         os._exit(0)
 
     def run(self):
@@ -1875,17 +1953,18 @@ async def handle_client(websocket, path=None):
                 elif mtype == "text":
                     text = data.get("text")
                     logger.info(f"استلام نص من الهاتف (الطول: {len(text)} حرف)")
-                    app.root.clipboard_clear()
-                    app.root.clipboard_append(text)
+                    # نسخ النص — pyperclip (أفضل مع Unicode) مع fallback لـ tkinter
+                    try:
+                        import pyperclip
+                        pyperclip.copy(text)
+                    except Exception:
+                        app.root.clipboard_clear()
+                        app.root.clipboard_append(text)
                     # ⚡ إرسال saved فوراً قبل الأعمال الثانوية
                     await websocket.send(json.dumps({"status": "saved"}))
                     device_name = connected_device.get("name") if connected_device else "جهاز غير معروف"
                     app.add_to_history(f"نص: {text[:30]}...", "", device_name)
                     show_notification("Wameed - نص جديد", f"تم نسخ النص إلى الحافظة تلقائياً")
-                    try:
-                        import winsound
-                        winsound.MessageBeep(winsound.MB_OK)
-                    except Exception: pass
 
                 elif mtype == "url":
                     url = data.get("url")
@@ -1959,33 +2038,33 @@ async def handle_client(websocket, path=None):
         if hasattr(app, 'root'):
             app.root.after(0, app._update_status_display)
 
-def show_notification(title, message):
-    """إرسال تنبيه ويندوز حديث (Toast) يظهر في مركز الإشعارات"""
+def show_notification(title: str, message: str):
+    """
+    إشعار Windows Toast موثوق.
+    يستخدم plyer أولاً (يدعم العربية وكل Unicode)
+    ثم يرجع لـ winsound فقط إذا فشل plyer.
+    """
+    safe_title   = str(title)[:64]
+    safe_message = str(message)[:200]
+
     try:
-        # سكربت PowerShell لإنشاء تنبيه Toast حديث
-        # تم استخدام نغمة 'Default' ويمكن تغييرها لـ 'IM' أو 'Mail' لتكون أقل حدة
-        ps_script = f"""
-        $title = "{title}"
-        $message = "{message}"
-        [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] > $null
-        $template = [Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent([Windows.UI.Notifications.ToastTemplateType]::ToastText02)
-        $toastXml = [xml]$template.GetXml()
-        $toastXml.GetElementsByTagName("text")[0].AppendChild($toastXml.CreateTextNode($title)) > $null
-        $toastXml.GetElementsByTagName("text")[1].AppendChild($toastXml.CreateTextNode($message)) > $null
-
-        # إضافة صوت هادئ
-        $audio = $toastXml.CreateElement("audio")
-        $audio.SetAttribute("src", "ms-winsoundevent:Notification.Default")
-        $toastXml.SelectSingleNode("/toast").AppendChild($audio) > $null
-
-        $xml = New-Object Windows.Data.Xml.Dom.XmlDocument
-        $xml.LoadXml($toastXml.OuterXml)
-        $toast = [Windows.UI.Notifications.ToastNotification]::new($xml)
-        [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier("Wameed").Show($toast)
-        """
-        subprocess.run(["powershell", "-Command", ps_script], capture_output=True, check=False)
+        from plyer import notification as _notif
+        icon_path = get_resource_path("wameed.ico")
+        _notif.notify(
+            title    = safe_title,
+            message  = safe_message,
+            app_name = APP_NAME,
+            app_icon = icon_path if os.path.exists(icon_path) else "",
+            timeout  = 4,
+        )
+        logger.debug(f"🔔 إشعار: {safe_title}")
     except Exception as e:
-        logger.error(f"Notification Error: {e}")
+        logger.warning(f"plyer notification failed: {e}")
+        try:
+            import winsound
+            winsound.MessageBeep(winsound.MB_OK)
+        except Exception:
+            pass
 
 async def run_ws_server():
     async with serve(handle_client, "0.0.0.0", PORT_WS):
@@ -1996,40 +2075,165 @@ def start_ws_thread():
     asyncio.set_event_loop(loop)
     loop.run_until_complete(run_ws_server())
 
+def _get_subnet_broadcast() -> str:
+    """
+    يحسب عنوان broadcast الصحيح للـ subnet.
+    مثال: 192.168.100.243/24 → 192.168.100.255
+    """
+    try:
+        import ipaddress
+        local_ip = get_local_ip()
+
+        # محاولة netifaces أولاً للحصول على netmask الدقيق
+        try:
+            import netifaces
+            for iface in netifaces.interfaces():
+                addrs = netifaces.ifaddresses(iface)
+                for addr in addrs.get(netifaces.AF_INET, []):
+                    if addr.get("addr") == local_ip:
+                        mask = addr.get("netmask", "255.255.255.0")
+                        net  = ipaddress.IPv4Network(f"{local_ip}/{mask}", strict=False)
+                        return str(net.broadcast_address)
+        except ImportError:
+            pass
+
+        # fallback: افتراض /24
+        parts = local_ip.split(".")
+        if len(parts) == 4:
+            return f"{parts[0]}.{parts[1]}.{parts[2]}.255"
+    except Exception as e:
+        logger.debug(f"_get_subnet_broadcast: {e}")
+    return None
+
+
 def udp_broadcast():
-    logger.info(f"بدء تشغيل مستجيب Discovery على منفذ UDP: {PORT_UDP}")
+    """
+    مستجيب UDP للـ Discovery:
+    - يرد على طلبات الهاتف (wameed_phone / discovery_ping)
+    - يُرسل إعلان دوري كل 30 ثانية على subnet broadcast
+    - يدعم كلاً من 255.255.255.255 والـ subnet broadcast
+    """
+    logger.info(f"بدء تشغيل مستجيب Discovery على UDP:{PORT_UDP}")
+
     try:
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        sock.bind(('', PORT_UDP))
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+        sock.bind(("", PORT_UDP))
         sock.settimeout(1.0)
+
+        subnet_bc   = _get_subnet_broadcast()
+        last_announce = 0.0
+
+        logger.info(f"Subnet broadcast: {subnet_bc or 'يُستخدم 255.255.255.255 فقط'}")
+
+        def _response() -> bytes:
+            return json.dumps({
+                "service": "wameed_pc",
+                "name":    socket.gethostname(),
+                "ip":      get_local_ip(),
+                "port":    PORT_WS,
+                "version": VERSION,
+            }, ensure_ascii=False).encode("utf-8")
+
         while state["running"]:
             try:
-                data, addr = sock.recvfrom(1024)
-                try:
-                    req = json.loads(data.decode('utf-8'))
-                    if req.get("service") == "wameed_pc":
-                        continue # Ignore our own broadcast
-                except: pass
+                # إعلان دوري كل 30 ثانية
+                now = time.time()
+                if now - last_announce >= 30:
+                    msg = _response()
+                    if subnet_bc:
+                        try:
+                            sock.sendto(msg, (subnet_bc, PORT_UDP))
+                        except Exception as e:
+                            logger.debug(f"subnet announce failed: {e}")
+                    try:
+                        sock.sendto(msg, ("255.255.255.255", PORT_UDP))
+                    except Exception:
+                        pass
+                    last_announce = now
 
-                # رد تلقائي على طلبات البحث من الهواتف
-                msg = json.dumps({
-                    "service": "wameed_pc",
-                    "name": socket.gethostname(),
-                    "ip": get_local_ip(),
-                    "port": PORT_WS,
-                    "version": VERSION
-                })
-                sock.sendto(msg.encode('utf-8'), addr)
-            except socket.timeout:
-                continue
+                # استقبال طلبات
+                try:
+                    data, addr = sock.recvfrom(2048)
+                except socket.timeout:
+                    continue
+
+                sender_ip = addr[0]
+                if sender_ip == get_local_ip():
+                    continue  # تجاهل حزمنا
+
+                try:
+                    req = json.loads(data.decode("utf-8"))
+                except (json.JSONDecodeError, UnicodeDecodeError):
+                    continue
+
+                svc      = req.get("service", "")
+                req_type = req.get("type", "")
+
+                if svc == "wameed_phone" or req_type == "discovery_ping":
+                    sock.sendto(_response(), addr)
+                    logger.info(f"✅ رد Discovery → {sender_ip} ({req.get('device', '?')})")
+                else:
+                    logger.debug(f"UDP: تجاهل حزمة من {sender_ip} | svc={svc}")
+
             except Exception as e:
-                logger.debug(f"UDP Recv Error: {e}")
+                if state["running"]:
+                    logger.debug(f"UDP loop: {e}")
+
+    except OSError as e:
+        logger.error(f"❌ فشل bind على UDP:{PORT_UDP}: {e}")
     except Exception as e:
-        logger.error(f"فشل تشغيل مستجيب UDP: {e}")
+        logger.error(f"❌ udp_broadcast: {e}")
+    finally:
+        try:
+            sock.close()
+        except Exception:
+            pass
+        logger.info("مستجيب UDP توقف")
+
+# ======================== Single Instance Lock ========================
+_instance_lock_sock = None
+
+def _acquire_instance_lock() -> bool:
+    """
+    يمنع تشغيل أكثر من نسخة واحدة من وميض في نفس الوقت.
+    يستخدم socket بدلاً من ملف قفل — أنظف ولا يترك بقايا.
+    """
+    global _instance_lock_sock
+    try:
+        _instance_lock_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        _instance_lock_sock.bind(("127.0.0.1", 17788))  # منفذ داخلي فريد لوميض
+        return True
+    except OSError:
+        # المنفذ مشغول → نسخة أخرى تعمل بالفعل
+        return False
+
+def _cleanup_on_exit():
+    """تنظيف أيقونة الـ tray عند الخروج لأي سبب"""
+    try:
+        if 'app' in globals() and hasattr(app, 'tray_icon') and app.tray_icon is not None:
+            app.tray_icon.stop()
+    except Exception:
+        pass
 
 # ======================== Main ========================
 if __name__ == "__main__":
+    # ── منع التكرار ──
+    if not _acquire_instance_lock():
+        # نسخة أخرى تعمل → أظهرها بدلاً من فتح نسخة جديدة
+        print("وميض يعمل بالفعل! لا يمكن تشغيل نسختين.")
+        try:
+            root = tk.Tk()
+            root.withdraw()
+            messagebox.showinfo("وميض", "وميض يعمل بالفعل ⚡\nابحث عن الأيقونة في شريط المهام.")
+            root.destroy()
+        except Exception:
+            pass
+        sys.exit(0)
+
+    atexit.register(_cleanup_on_exit)
+
     logger.info("="*60)
     logger.info(f"--- بدء تشغيل تطبيق وميض (Wameed) الإصدار {VERSION} ---")
     logger.info(f"عنوان IP المستخدم: {get_local_ip()}")
