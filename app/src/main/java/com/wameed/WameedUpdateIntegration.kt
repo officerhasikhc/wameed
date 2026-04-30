@@ -43,11 +43,9 @@ fun UpdateIntegration(
                 showUpdateNotification.value = false
             }
             is UpdateState.Downloaded -> {
-                // For flexible updates, we need to call completeUpdate to finish the installation
-                updateManager.completeUpdate()
+                // التثبيت يبدأ تلقائياً بعد التنزيل
             }
             is UpdateState.Failed -> {
-                // نكتفي بالحالة في زر الإعدادات ولا داعي لإزعاج المستخدم برسالة Toast في الخلفية
                 showUpdateDialog.value = false
             }
             else -> {}
@@ -59,7 +57,9 @@ fun UpdateIntegration(
         isVisible = showUpdateDialog.value,
         updateState = updateState,
         onUpdateAccepted = {
-            updateManager.startFlexibleUpdate(context as ComponentActivity)
+            coroutineScope.launch {
+                updateManager.startFlexibleUpdate(context as ComponentActivity)
+            }
         },
         onUpdateDeclined = {
             showUpdateDialog.value = false
