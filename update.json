@@ -1,10 +1,10 @@
 {
   "android": {
-    "versionCode": 8,
+    "versionCode": 9,
     "versionName": "1.7.2",
     "updateUrl": "https://github.com/officerhasikhc/wameed/releases/download/1.7.2/Wameed-Android.apk",
     "isForceUpdate": false,
-    "releaseNotes": "تحديث جديد يتضمن ميزات النقل السريع وإصلاحات الأخطاء."
+    "releaseNotes": "تحسين نظام التحديث التلقائي وإصلاح مشكلة تعارض الحزمة."
   },
   "windows": {
     "version": "1.7.2",
