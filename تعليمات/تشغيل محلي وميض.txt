@@ -1,0 +1,9 @@
+# 1. أوقف أي نسخة تعمل
+Get-Process python* -ErrorAction SilentlyContinue | Stop-Process -Force
+
+# 2. انتظر ثانية (لتحرير المنفذ)
+Start-Sleep -Seconds 2
+
+# 3. شغّل التطبيق (ستظهر النافذة + الأخطاء في PowerShell مباشرة)
+cd C:\Users\super\AndroidStudioProjects\wameed\windows-receiver\src
+python receiver.py

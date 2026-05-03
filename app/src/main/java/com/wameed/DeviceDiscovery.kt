@@ -122,16 +122,51 @@ class DeviceDiscovery {
                 put("device", android.os.Build.MODEL)
             }
             val data = ping.toString().toByteArray(Charsets.UTF_8)
-            val packet = DatagramPacket(
+
+            // Send to global broadcast
+            val globalPacket = DatagramPacket(
                 data, data.size,
                 InetAddress.getByName("255.255.255.255"),
                 DISCOVERY_PORT
             )
-            socket.send(packet)
+            socket.send(globalPacket)
+
+            // Also send to subnet broadcast for networks that block global broadcast
+            try {
+                val subnetBc = getSubnetBroadcast()
+                if (subnetBc != null && subnetBc != "255.255.255.255") {
+                    val subnetPacket = DatagramPacket(
+                        data, data.size,
+                        InetAddress.getByName(subnetBc),
+                        DISCOVERY_PORT
+                    )
+                    socket.send(subnetPacket)
+                    Log.d(TAG, "أُرسلت حزمة اكتشاف على subnet broadcast: $subnetBc")
+                }
+            } catch (e: Exception) {
+                Log.d(TAG, "Subnet broadcast failed (non-critical): ${e.message}")
+            }
+
             Log.d(TAG, "أُرسلت حزمة اكتشاف broadcast على port $DISCOVERY_PORT")
         } catch (e: Exception) {
             Log.w(TAG, "فشل إرسال حزمة الاكتشاف: ${e.message}")
         }
+    }
+
+    private fun getSubnetBroadcast(): String? {
+        try {
+            val interfaces = java.net.NetworkInterface.getNetworkInterfaces() ?: return null
+            for (iface in interfaces) {
+                if (iface.isLoopback || !iface.isUp) continue
+                for (addr in iface.interfaceAddresses) {
+                    val broadcast = addr.broadcast
+                    if (broadcast != null) {
+                        return broadcast.hostAddress
+                    }
+                }
+            }
+        } catch (_: Exception) {}
+        return null
     }
 
     fun stop() {

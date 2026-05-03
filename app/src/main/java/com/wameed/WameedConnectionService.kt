@@ -78,8 +78,8 @@ class WameedConnectionService : Service() {
     companion object {
         private const val CHANNEL_ID = "wameed_keepalive"
         private const val NOTIF_ID = 4711
-        private const val IDLE_TIMEOUT_MS = 5 * 60 * 1000L   // 5 minutes
-        private const val RECEIVE_IDLE_TIMEOUT_MS = 5 * 60 * 1000L  // receiver server grace
+        private const val IDLE_TIMEOUT_MS = 15 * 60 * 1000L  // 15 minutes
+        private const val RECEIVE_IDLE_TIMEOUT_MS = 10 * 60 * 1000L // receiver server grace
         private const val PING_INTERVAL_MS = 25 * 1000L      // 25s
         private const val MAX_PING_FAILURES = 3
 
@@ -409,19 +409,21 @@ class WameedConnectionService : Service() {
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
                 Log.w(TAG, "WS failure: ${t.message}")
-                // Clear handle so a subsequent refresh() / schedulePing tick
-                // will detect ws==null and reopen cleanly.
                 ws = null
                 pingFailures++
-                WameedEvents.tryEmit(WameedEvent.ServiceStatus(false, pcDisplay))
+                // Debounce: delay ServiceStatus(false) by 3s to avoid UI flicker
+                // during temporary WS drops (e.g. after a file send closes its WS)
+                handler.postDelayed({
+                    if (ws == null) {
+                        WameedEvents.tryEmit(WameedEvent.ServiceStatus(false, pcDisplay))
+                    }
+                }, 3000)
                 
                 if (pingFailures >= MAX_PING_FAILURES) {
                     if (!isDiscovering) {
                         Log.i(TAG, "Connection lost to $pcDisplay. Starting background discovery...")
                         startBackgroundDiscovery()
                     } else {
-                        // If we are already discovering and still failing, maybe the PC is offline.
-                        // We'll let the idle timer eventually stop the service.
                         Log.d(TAG, "Already discovering or PC is offline.")
                     }
                 }
@@ -429,9 +431,13 @@ class WameedConnectionService : Service() {
 
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
                 Log.i(TAG, "WS closed code=$code reason=$reason")
-                // Clear handle so we reconnect when the user next interacts.
                 ws = null
-                WameedEvents.tryEmit(WameedEvent.ServiceStatus(false, pcDisplay))
+                // Debounce: only emit disconnected if WS is still null after 3s
+                handler.postDelayed({
+                    if (ws == null) {
+                        WameedEvents.tryEmit(WameedEvent.ServiceStatus(false, pcDisplay))
+                    }
+                }, 3000)
             }
         })
     }
@@ -451,7 +457,12 @@ class WameedConnectionService : Service() {
                     openWs()
                 }
                 if (pingFailures >= MAX_PING_FAILURES) {
-                    stopSelfCleanly("ping-failed")
+                    Log.w(TAG, "Ping failures reached $MAX_PING_FAILURES — attempting rediscovery before stopping")
+                    if (!isDiscovering) {
+                        startBackgroundDiscovery()
+                    }
+                    // Don't stop immediately — let background discovery try to reconnect.
+                    // The idle timer will eventually stop the service if discovery also fails.
                     return@postDelayed
                 }
             } catch (e: Exception) {

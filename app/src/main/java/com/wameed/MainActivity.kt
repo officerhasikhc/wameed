@@ -165,7 +165,7 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-enum class ConnectionState { Idle, Checking, Searching, Connecting, PairingPending, Connected, Failed, Rejected }
+enum class ConnectionState { Idle, Checking, Searching, Connecting, PairingPending, Connected, Discovered, Failed, Rejected }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -281,40 +281,53 @@ fun MainScreen(sender: WameedSender, discovery: DeviceDiscovery, updateManager: 
             WameedPrefs.setPcName(context, device.name)
         }
 
-        sender.sendPing(object : WameedSender.SendCallback {
-            override fun onSuccess(message: String) {
-                Log.i("MainActivity", "✅ تم الربط بنجاح مع ${device.name}")
-                mainHandler.post {
-                    connectionState = ConnectionState.Connected
-                    statusText = context.getString(R.string.connected_to, device.name)
-                    WameedPrefs.setLastConnected(context)
+        var retryCount = 0
+        val maxRetries = 1
+
+        fun attemptConnect() {
+            sender.sendPing(object : WameedSender.SendCallback {
+                override fun onSuccess(message: String) {
+                    Log.i("MainActivity", "✅ تم الربط بنجاح مع ${device.name}")
+                    mainHandler.post {
+                        connectionState = ConnectionState.Connected
+                        statusText = context.getString(R.string.connected_to, device.name)
+                        WameedPrefs.setLastConnected(context)
+                    }
                 }
-            }
-            override fun onError(error: String) {
-                Log.e("MainActivity", "❌ فشل الربط مع ${device.name}: $error")
-                mainHandler.post {
-                    // التحقق إذا كان الخطأ بسبب رفض الاقتران
+                override fun onError(error: String) {
                     val isRejected = error.contains("رفض") || error.contains("rejected", ignoreCase = true)
-                    connectionState = if (isRejected) ConnectionState.Rejected else ConnectionState.Failed
-                    statusText = if (isRejected) {
-                        context.getString(R.string.status_pairing_rejected)
+                    if (isRejected) {
+                        Log.w("MainActivity", "❌ الكمبيوتر رفض الاقتران: ${device.name}")
+                        mainHandler.post {
+                            connectionState = ConnectionState.Rejected
+                            statusText = context.getString(R.string.status_pairing_rejected)
+                        }
+                    } else if (retryCount < maxRetries) {
+                        retryCount++
+                        Log.w("MainActivity", "⚠️ فشل الربط (محاولة $retryCount/${maxRetries+1}), إعادة المحاولة...")
+                        mainHandler.postDelayed({ attemptConnect() }, 2000)
                     } else {
-                        context.getString(R.string.connection_failed_to, device.name)
+                        Log.e("MainActivity", "❌ فشل الربط نهائياً مع ${device.name}: $error")
+                        mainHandler.post {
+                            connectionState = ConnectionState.Failed
+                            statusText = context.getString(R.string.connection_failed_to, device.name)
+                        }
                     }
                 }
-            }
-            override fun onInfo(message: String) {
-                Log.d("MainActivity", "ℹ️ حالة الربط: $message")
-                mainHandler.post {
-                    // عند انتظار موافقة الاقتران
-                    if (message.contains("انتظار") || message.contains("waiting", ignoreCase = true)) {
-                        connectionState = ConnectionState.PairingPending
-                        statusText = context.getString(R.string.status_waiting_for_approval)
+                override fun onInfo(message: String) {
+                    Log.d("MainActivity", "ℹ️ حالة الربط: $message")
+                    mainHandler.post {
+                        if (message.contains("انتظار") || message.contains("waiting", ignoreCase = true)) {
+                            connectionState = ConnectionState.PairingPending
+                            statusText = context.getString(R.string.status_waiting_for_approval)
+                        }
                     }
                 }
-            }
-            override fun onProgress(percent: Int) {}
-        })
+                override fun onProgress(percent: Int) {}
+            })
+        }
+
+        attemptConnect()
     }
 
     fun startDiscovery() {
@@ -387,7 +400,7 @@ fun MainScreen(sender: WameedSender, discovery: DeviceDiscovery, updateManager: 
         val port = WameedPrefs.getPcPort(context)
         val tcpOk = withContextIO { DeviceDiscovery.isTcpReachable(ip, port, 800) }
         val recentSend = WameedPrefs.getLastSendInfo(context)
-            ?.takeIf { (System.currentTimeMillis() - it.first) < 60_000 }
+            ?.takeIf { (System.currentTimeMillis() - it.first) < 120_000 }
 
         when {
             tcpOk -> {
@@ -416,10 +429,35 @@ fun MainScreen(sender: WameedSender, discovery: DeviceDiscovery, updateManager: 
                 statusText = context.getString(R.string.connected_last_send_short, ago)
             }
             else -> {
-                connectionState = ConnectionState.Failed
-                statusText = context.getString(R.string.pc_unavailable)
-                selectedDevice = null
-                if (triggerDiscoveryOnFailure) startDiscovery()
+                // TCP failed and no recent send: check if PC is at least discoverable
+                val wasConnected = connectionState == ConnectionState.Connected
+                if (wasConnected) {
+                    // Give a brief grace — mark as Discovered, not Failed
+                    connectionState = ConnectionState.Discovered
+                    statusText = context.getString(R.string.pc_unavailable)
+                    // Retry TCP once after a short delay before declaring failure
+                    delay(2000)
+                    val retryOk = withContextIO { DeviceDiscovery.isTcpReachable(ip, port, 800) }
+                    if (retryOk) {
+                        connectionState = ConnectionState.Connected
+                        val friendly = WameedPrefs.getPcName(context)
+                        selectedDevice = DeviceDiscovery.DiscoveredDevice(
+                            name = friendly.ifBlank { WameedPrefs.getDisplayAddress(context) },
+                            ip = ip, port = port
+                        )
+                        statusText = context.getString(R.string.connected_ready)
+                    } else {
+                        connectionState = ConnectionState.Failed
+                        statusText = context.getString(R.string.pc_unavailable)
+                        selectedDevice = null
+                        if (triggerDiscoveryOnFailure) startDiscovery()
+                    }
+                } else {
+                    connectionState = ConnectionState.Failed
+                    statusText = context.getString(R.string.pc_unavailable)
+                    selectedDevice = null
+                    if (triggerDiscoveryOnFailure) startDiscovery()
+                }
             }
         }
     }
@@ -435,10 +473,18 @@ fun MainScreen(sender: WameedSender, discovery: DeviceDiscovery, updateManager: 
                     connectionState = ConnectionState.Connected
                     statusText = context.getString(R.string.connected_to, event.pcName)
                 } else {
-                    // Only downgrade if we were connected.
+                    // Only downgrade if we were connected AND no recent send.
+                    // This prevents flicker when the keep-alive WS drops temporarily.
                     if (connectionState == ConnectionState.Connected) {
-                        connectionState = ConnectionState.Failed
-                        statusText = context.getString(R.string.connection_lost)
+                        val recentSendGrace = WameedPrefs.getLastSendInfo(context)
+                            ?.takeIf { (System.currentTimeMillis() - it.first) < 120_000 }
+                        if (recentSendGrace != null) {
+                            // Recent send exists — stay connected, don't flicker
+                            Log.d("MainActivity", "ServiceStatus(false) ignored — recent send within grace")
+                        } else {
+                            connectionState = ConnectionState.Discovered
+                            statusText = context.getString(R.string.connection_lost)
+                        }
                     }
                 }
             }
@@ -457,19 +503,29 @@ fun MainScreen(sender: WameedSender, discovery: DeviceDiscovery, updateManager: 
 
     LaunchedEffect(connectionState, selectedDevice) {
         if (connectionState != ConnectionState.Connected) return@LaunchedEffect
-        // We now rely on ServiceStatus events for background health,
-        // but we still keep this as a fallback/active check when in foreground.
         var failures = 0
-        while (connectionState == ConnectionState.Connected) {
+        while (connectionState == ConnectionState.Connected || connectionState == ConnectionState.Discovered) {
             delay(10_000)
             val dev = selectedDevice ?: break
             val alive = withContextIO { DeviceDiscovery.isTcpReachable(dev.ip, dev.port, 1000) }
             if (alive) {
                 failures = 0
+                if (connectionState == ConnectionState.Discovered) {
+                    connectionState = ConnectionState.Connected
+                    statusText = context.getString(R.string.connected_ready)
+                }
                 WameedPrefs.setLastConnected(context)
             } else {
                 failures += 1
-                if (failures >= 2) {
+                // Check recent send grace before downgrading
+                val recentSendGrace = WameedPrefs.getLastSendInfo(context)
+                    ?.takeIf { (System.currentTimeMillis() - it.first) < 120_000 }
+                if (recentSendGrace != null) {
+                    failures = 0 // Reset — recent send keeps us alive
+                } else if (failures == 2) {
+                    connectionState = ConnectionState.Discovered
+                    statusText = context.getString(R.string.connection_lost)
+                } else if (failures >= 4) {
                     connectionState = ConnectionState.Failed
                     statusText = context.getString(R.string.connection_lost)
                     break
@@ -718,9 +774,13 @@ fun ConnectionTab(
                 else -> {
                     LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         items(devices.values.toList(), key = { it.address }) { device ->
-                            DeviceItem(device, selectedDevice?.address == device.address,
-                                connectionState == ConnectionState.Connecting
-                                        && selectedDevice?.address == device.address) { onConnect(device) }
+                            val isSel = selectedDevice?.address == device.address
+                            DeviceItem(
+                                device = device,
+                                isSelected = isSel,
+                                isConnecting = connectionState == ConnectionState.Connecting && isSel,
+                                isConnected = connectionState == ConnectionState.Connected && isSel
+                            ) { onConnect(device) }
                         }
                     }
                 }
@@ -1452,6 +1512,7 @@ fun StatusCard(
 ) {
     val dotColor = when (state) {
         ConnectionState.Connected -> Color(0xFF22C55E)
+        ConnectionState.Discovered -> Color(0xFFFBBF24)
         ConnectionState.Failed -> Color(0xFFEF4444)
         ConnectionState.Rejected -> Color(0xFFDC2626)
         ConnectionState.Connecting -> Color(0xFFFBBF24)
@@ -1463,6 +1524,7 @@ fun StatusCard(
 
     val bgColor = when (state) {
         ConnectionState.Connected -> Color(0xFFF0FFF4)
+        ConnectionState.Discovered -> Color(0xFFFFFBEB)
         ConnectionState.Failed -> Color(0xFFFFF5F5)
         ConnectionState.Rejected -> Color(0xFFFEF2F2)
         ConnectionState.Connecting -> Color(0xFFFFFBEB)
@@ -1626,8 +1688,16 @@ fun DeviceItem(
     device: DeviceDiscovery.DiscoveredDevice,
     isSelected: Boolean,
     isConnecting: Boolean,
+    isConnected: Boolean = false,
     onClick: () -> Unit
 ) {
+    val dotColor = when {
+        isConnected -> Color(0xFF22C55E)   // أخضر — متصل
+        isConnecting -> Color(0xFFFBBF24)  // أصفر — جاري الاتصال
+        isSelected -> Color(0xFFFBBF24)    // أصفر — مكتشف/محدد
+        else -> Color(0xFF9CA3AF)          // رمادي — مكتشف فقط
+    }
+
     Surface(
         modifier = Modifier
             .fillMaxWidth()
@@ -1640,18 +1710,27 @@ fun DeviceItem(
             modifier = Modifier.padding(16.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Box(
-                modifier = Modifier
-                    .size(40.dp)
-                    .clip(CircleShape)
-                    .background(Color(0xFF43A047).copy(alpha = 0.1f)),
-                contentAlignment = Alignment.Center
-            ) {
-                Text(
-                    device.name.first().uppercase(),
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 16.sp,
-                    color = Color(0xFF43A047)
+            Box(contentAlignment = Alignment.Center) {
+                Box(
+                    modifier = Modifier
+                        .size(40.dp)
+                        .clip(CircleShape)
+                        .background(Color(0xFF43A047).copy(alpha = 0.1f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        device.name.first().uppercase(),
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 16.sp,
+                        color = Color(0xFF43A047)
+                    )
+                }
+                Box(
+                    modifier = Modifier
+                        .size(12.dp)
+                        .clip(CircleShape)
+                        .background(dotColor)
+                        .align(Alignment.BottomEnd)
                 )
             }
             Spacer(modifier = Modifier.width(12.dp))

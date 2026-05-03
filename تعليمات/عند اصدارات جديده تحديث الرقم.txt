@@ -1,0 +1,21 @@
+لي:
+1.
+تغيير الرقم في 3 أماكن فقط:
+◦
+app/build.gradle.kts (الخاص بالأندرويد).
+◦
+package-release.ps1 (السطر رقم 14).
+◦
+windows-receiver/installer/wameed.iss (السطر رقم 8).
+2.
+تشغيل السكريبت:
+.\package-release.ps1
+سيقوم هذا الأمر ببناء ملف الويندوز بالاسم الجديد (WameedSetup-1.3.0.exe) وبناء APK الأندرويد الموقّع، ويضعهما لك في ملف ZIP واحد.
+3.
+الرفع إلى GitHub:
+◦
+أنشئ Release برقم النسخة وارفع الملفات الناتجة.
+4.
+تحديث update.json:
+◦
+قم بتغيير الرابط في ملف update.json ليرمز للنسخة الجديدة واعمل git push.

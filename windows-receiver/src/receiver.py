@@ -146,7 +146,12 @@ translations = {
         "auto_open_file_label": "فتح الملفات تلقائياً عند الاستلام",
         "auto_open_folder_label": "فتح مجلد الحفظ عند الاستلام",
         "warning": "تنبيه",
-        "lang_label": "اللغة / Language"
+        "lang_label": "اللغة / Language",
+        "status_discovered": "🔵 مكتشف: {name} (غير متصل بعد)",
+        "status_verifying": "🔄 جاري التحقق من الاتصال...",
+        "status_unstable": "🟡 اتصال غير مستقر مع {name}",
+        "device_not_reachable": "الجهاز '{name}' مكتشف لكن غير متاح حالياً.\nتأكد من فتح تطبيق وميض على الهاتف وتفعيل الاستقبال.",
+        "connection_lost_notif": "تم فقدان الاتصال مع {name}"
     },
     "en": {
         "app_header": "Wameed",
@@ -223,7 +228,12 @@ translations = {
         "auto_open_file_label": "Auto-open files on receipt",
         "auto_open_folder_label": "Open save folder on receipt",
         "warning": "Warning",
-        "lang_label": "Language / اللغة"
+        "lang_label": "Language / اللغة",
+        "status_discovered": "🔵 Discovered: {name} (not connected yet)",
+        "status_verifying": "🔄 Verifying connection...",
+        "status_unstable": "🟡 Unstable connection with {name}",
+        "device_not_reachable": "Device '{name}' was discovered but is not reachable.\nMake sure the Wameed app is open on the phone with receiving enabled.",
+        "connection_lost_notif": "Connection lost with {name}"
     }
 }
 
@@ -293,6 +303,9 @@ connected_device = None  # الجهاز المتصل حالياً {"id", "name",
 last_connection_time = None  # وقت آخر اتصال
 connection_check_thread = None  # Thread لفحص الاتصال الدوري
 active_connections = {}  # عدد اتصالات WebSocket النشطة لكل IP {ip: count}
+# حالة الاتصال الموحدة: disconnected, discovered, connecting, connected, unstable
+connection_state = "disconnected"
+_health_check_failures = 0  # عدد فشل فحص TCP المتتالي
 
 def load_config():
     if os.path.exists(CONFIG_FILE):
@@ -524,31 +537,37 @@ class WameedApp:
                          font=(FONT_AR, fs(11))).pack(side="left" if LANG=="ar" else "right", padx=4)
 
     def _update_status_display(self):
-        """تحديث عرض الحالة الذكية"""
+        """تحديث عرض الحالة بناءً على connection_state الموحد"""
         for w in self.status_frame.winfo_children(): w.destroy()
 
-        global connected_device, last_connection_time
+        global connected_device, last_connection_time, connection_state
 
-        if connected_device and connected_device.get("name"):
-            # متصل بجهاز
-            device_name = connected_device.get("name", "جهاز غير معروف")
+        device_name = connected_device.get("name", "?") if connected_device else ""
+
+        if connection_state == "connected" and device_name:
             status_text = t("status_connected_to").format(name=device_name)
             dot_color = "#22C55E"  # أخضر
-            show_ip = True
+        elif connection_state == "discovered" and device_name:
+            status_text = t("status_discovered").format(name=device_name)
+            dot_color = "#3B82F6"  # أزرق
+        elif connection_state == "unstable" and device_name:
+            status_text = t("status_unstable").format(name=device_name)
+            dot_color = "#FBBF24"  # أصفر
+        elif connection_state == "connecting":
+            status_text = t("status_verifying")
+            dot_color = "#3B82F6"  # أزرق
         elif last_connection_time:
-            # كان متصلاً سابقاً (خلال 30 دقيقة)
             elapsed = (datetime.now() - last_connection_time).total_seconds()
-            if elapsed < 1800:  # أقل من 30 دقيقة
+            if elapsed < 1800:
                 mins = max(1, int(elapsed / 60))
                 status_text = t("status_last_seen").format(mins=mins)
+                dot_color = "#FBBF24"  # أصفر
             else:
                 status_text = t("status_ready")
-            dot_color = "#FBBF24"  # أصفر
-            show_ip = False
+                dot_color = "#9CA3AF"  # رمادي
         else:
             status_text = t("status_ready")
             dot_color = "#9CA3AF"  # رمادي
-            show_ip = False
 
         self.status_dot = tk.Label(self.status_frame, text="●", fg=dot_color, bg="#F8FAFC", font=(FONT_AR, 18))
         self.status_dot.pack(side="right" if LANG=="ar" else "left", padx=8)
@@ -557,25 +576,46 @@ class WameedApp:
                                      bg="#F8FAFC", font=(FONT_AR, fs(12), "bold"), fg="#1E293B")
         self.status_label.pack(side="right" if LANG=="ar" else "left")
 
-        # تسجيل حالة الاتصال فقط عند تغيرها (لتقليل الضجيج)
         new_status = status_text
         if not hasattr(self, '_last_logged_status') or self._last_logged_status != new_status:
             self._last_logged_status = new_status
             logger.info(f"🔄 تحديث الحالة: {new_status}")
 
     def _start_connection_monitor(self):
-        """بدء مراقبة الاتصال الدورية والبحث التلقائي"""
+        """بدء مراقبة الاتصال الدورية مع فحص TCP فعلي"""
         def monitor():
+            global _health_check_failures, connection_state
+
             # بحث أولي عند التشغيل إذا لم يكن هناك IP
             if not state.get("target_ip"):
                 time.sleep(2)
                 self.root.after(0, self._auto_discover_target)
 
+            cycle = 0
             while state["running"]:
                 try:
                     # تحديث العرض كل 10 ثوانٍ
                     if hasattr(self, 'status_frame'):
                         self.root.after(0, self._update_status_display)
+
+                    # فحص صحة الاتصال كل 30 ثانية (كل 3 دورات)
+                    cycle += 1
+                    if cycle % 3 == 0 and connected_device and connected_device.get("ip"):
+                        ip = connected_device["ip"]
+                        reachable = self._verify_device_connection(ip)
+
+                        if reachable:
+                            _health_check_failures = 0
+                            if connection_state in ("unstable", "discovered"):
+                                self._set_connection_state("connected", connected_device)
+                        else:
+                            _health_check_failures += 1
+                            if _health_check_failures == 1 and connection_state == "connected":
+                                self._set_connection_state("unstable", connected_device)
+                            elif _health_check_failures >= 3:
+                                logger.warning(f"📴 فقدان الاتصال مع {connected_device.get('name', '?')} بعد {_health_check_failures} فحوصات فاشلة")
+                                old_device = connected_device.copy() if connected_device else None
+                                self._set_connection_state("disconnected", old_device)
                 except Exception as e:
                     logger.error(f"Status monitor error: {e}")
                 time.sleep(10)
@@ -672,17 +712,42 @@ class WameedApp:
                 if idx < len(discovered_devices):
                     device = discovered_devices[idx]
                     ip = device.get("ip")
-                    logger.info(f"تم اختيار الجهاز {device.get('name')} من قائمة البحث")
+                    name = device.get("name", "?")
+                    logger.info(f"تم اختيار الجهاز {name} من قائمة البحث — التحقق من الاتصال...")
 
-                    # تحديث IP الهدف في الرئيسية
-                    state["target_ip"] = ip
-                    save_config()
-                    if hasattr(self, 'home_ip_var'):
-                        self.home_ip_var.set(ip)
+                    status_label.config(text=t("status_verifying"), fg="#3B82F6")
+                    dialog.update_idletasks()
 
-                    dialog.destroy()
-                    # فتح نافذة الإرسال مع الجهاز المحدد
-                    self._show_send_dialog(device_ip=ip, device_name=device.get("name"))
+                    # التحقق من أن الجهاز يقبل الاتصال فعلياً (TCP check على port 7789)
+                    reachable = self._verify_device_connection(ip)
+
+                    if reachable:
+                        logger.info(f"✅ الجهاز {name} ({ip}) متاح — فتح نافذة الإرسال")
+                        state["target_ip"] = ip
+                        save_config()
+                        if hasattr(self, 'home_ip_var'):
+                            self.home_ip_var.set(ip)
+
+                        device_info = {
+                            "id": device.get("id", ""),
+                            "name": name,
+                            "ip": ip,
+                            "connected_at": datetime.now()
+                        }
+                        self._set_connection_state("connected", device_info)
+                        self.root.after(0, lambda: self.update_device_history(device.get("id", ""), name))
+
+                        dialog.destroy()
+                        self._show_send_dialog(device_ip=ip, device_name=name)
+                    else:
+                        logger.warning(f"⚠️ الجهاز {name} ({ip}) مكتشف لكن غير متاح")
+                        device_info = {
+                            "id": device.get("id", ""),
+                            "name": name,
+                            "ip": ip,
+                        }
+                        self._set_connection_state("discovered", device_info)
+                        status_label.config(text=t("device_not_reachable").format(name=name).split('\n')[0], fg="#EF4444")
 
         devices_listbox.bind("<<ListboxSelect>>", on_device_select)
 
@@ -764,6 +829,45 @@ class WameedApp:
             logger.error(f"Discovery failed: {e}")
 
         return devices
+
+    def _verify_device_connection(self, ip, port=7789, timeout=1.5):
+        """TCP reachability check — verifies the phone's WS server is actually accepting connections"""
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.settimeout(timeout)
+            s.connect((ip, port))
+            s.close()
+            return True
+        except Exception:
+            return False
+
+    def _set_connection_state(self, new_state, device_info=None):
+        """Update the unified connection state and refresh UI"""
+        global connection_state, connected_device, last_connection_time, _health_check_failures
+        old_state = connection_state
+        connection_state = new_state
+
+        if new_state == "connected" and device_info:
+            connected_device = device_info
+            last_connection_time = datetime.now()
+            _health_check_failures = 0
+        elif new_state == "discovered" and device_info:
+            # Keep device info but mark as not fully connected
+            if not connected_device or connected_device.get("ip") != device_info.get("ip"):
+                connected_device = device_info
+        elif new_state == "disconnected":
+            if connected_device:
+                last_connection_time = datetime.now()
+            connected_device = None
+            _health_check_failures = 0
+
+        if old_state != new_state:
+            logger.info(f"🔄 حالة الاتصال: {old_state} → {new_state}")
+            if new_state == "disconnected" and old_state == "connected" and device_info:
+                show_notification("Wameed", t("connection_lost_notif").format(name=device_info.get("name", "?")))
+
+        if hasattr(self, 'status_frame'):
+            self.root.after(0, self._update_status_display)
 
     def _build_devices(self):
         """بناء تبويب الأجهزة - سجل الأجهزة المتصلة"""
@@ -890,21 +994,22 @@ class WameedApp:
                 break
 
         if target_device:
-            global connected_device, last_connection_time
-            connected_device = {
-                "id": device_id,
-                "name": device_name,
-                "ip": target_device.get("ip"),
-                "connected_at": datetime.now()
-            }
-            last_connection_time = datetime.now()
-
-            # تحديث العرض
-            self._update_status_display()
-            self._build_devices()
-
-            # فتح نافذة الإرسال
-            self._show_send_dialog(device_ip=target_device.get("ip"), device_name=device_name)
+            ip = target_device.get("ip")
+            # التحقق من الاتصال الفعلي قبل فتح الإرسال
+            if self._verify_device_connection(ip):
+                device_info = {
+                    "id": device_id,
+                    "name": device_name,
+                    "ip": ip,
+                    "connected_at": datetime.now()
+                }
+                self._set_connection_state("connected", device_info)
+                self._build_devices()
+                self._show_send_dialog(device_ip=ip, device_name=device_name)
+            else:
+                device_info = {"id": device_id, "name": device_name, "ip": ip}
+                self._set_connection_state("discovered", device_info)
+                messagebox.showwarning("تنبيه", t("device_not_reachable").format(name=device_name))
         else:
             messagebox.showwarning("تنبيه", f"لم يتم العثور على الجهاز '{device_name}' في الشبكة\nتأكد من أن التطبيق مفتوح على الهاتف")
 
@@ -1515,6 +1620,15 @@ class WameedApp:
                                 self.root.after(0, lambda n=fname, p=path, dn=d_name: self.add_to_history(n, p, device_name=dn, direction="sent"))
 
                             logger.info(f"اكتمل إرسال جميع الملفات ({total_files}) بنجاح.")
+                            # تحديث حالة الاتصال بعد الإرسال الناجح
+                            d_name = device_name if device_name else ip
+                            device_info = {
+                                "id": connected_device.get("id", "") if connected_device else "",
+                                "name": d_name,
+                                "ip": ip,
+                                "connected_at": datetime.now()
+                            }
+                            self.root.after(0, lambda: self._set_connection_state("connected", device_info))
                             window.after(0, lambda: self._show_inline_message(window, f"✅ تم إرسال {total_files} ملفات بنجاح"))
                             return # نجاح، اخرج من حلقة المحاولات
 
@@ -1586,6 +1700,15 @@ class WameedApp:
                             logger.info("تم إرسال النص بنجاح.")
                             # إضافة للسجل كـ نص مرسل
                             self.root.after(0, lambda: self.add_to_history(f"نص: {text[:30]}...", "", device_name=device_name or ip, direction="sent"))
+                            # تحديث حالة الاتصال بعد الإرسال الناجح
+                            d_name = device_name if device_name else ip
+                            device_info = {
+                                "id": connected_device.get("id", "") if connected_device else "",
+                                "name": d_name,
+                                "ip": ip,
+                                "connected_at": datetime.now()
+                            }
+                            self.root.after(0, lambda: self._set_connection_state("connected", device_info))
 
                             window.after(0, lambda: progress_var.set(100))
                             window.after(0, lambda: self._show_inline_message(window, "✅ تم إرسال النص بنجاح"))
@@ -1889,31 +2012,34 @@ async def handle_client(websocket, path=None):
                 data = json.loads(message)
                 mtype = data.get("type")
 
+                if mtype == "ping":
+                    await websocket.send(json.dumps({"type": "pong"}))
+                    continue
+
                 if mtype == "hello":
                     device_id = data.get("device_id")
                     device_name = data.get("device")
                     logger.info(f"طلب مصافحة من جهاز: {device_name} ({device_id})")
                     is_trusted = any(d["id"] == device_id for d in state["trusted_devices"])
 
+                    def _mark_connected(did, dname, dip):
+                        device_info = {
+                            "id": did,
+                            "name": dname,
+                            "ip": dip,
+                            "connected_at": datetime.now()
+                        }
+                        state["target_ip"] = dip
+                        save_config()
+                        if hasattr(app, 'home_ip_var'):
+                            app.root.after(0, lambda: app.home_ip_var.set(dip))
+                        app._set_connection_state("connected", device_info)
+                        app.root.after(0, lambda: app.update_device_history(did, dname))
+
                     if is_trusted:
                         logger.info(f"تم قبول الاتصال تلقائياً: {device_name} (جهاز موثوق)")
                         await websocket.send(json.dumps({"status": "paired"}))
-                        # تحديث الجهاز المتصل والسجل
-                        connected_device = {
-                            "id": device_id,
-                            "name": device_name,
-                            "ip": client_ip, # Store IP for automatic use in send dialog
-                            "connected_at": datetime.now()
-                        }
-
-                        # تحديث IP الهدف ليكون الجهاز الذي اتصل بنا حالياً
-                        state["target_ip"] = client_ip
-                        save_config()
-                        if hasattr(app, 'home_ip_var'):
-                            app.root.after(0, lambda: app.home_ip_var.set(client_ip))
-
-                        app.root.after(0, lambda: app.update_device_history(device_id, device_name))
-                        app.root.after(0, app._update_status_display)
+                        app.root.after(0, lambda: _mark_connected(device_id, device_name, client_ip))
                     else:
                         logger.info(f"جهاز غير معروف '{device_name}' يطلب الاقتران. بانتظار رد المستخدم...")
                         await websocket.send(json.dumps({"status": "pairing_required"}))
@@ -1929,22 +2055,7 @@ async def handle_client(websocket, path=None):
                             state["trusted_devices"].append({"id": device_id, "name": device_name})
                             save_config()
                             app.root.after(0, app.refresh_devices_list)
-                            # تحديث الجهاز المتصل والسجل
-                            connected_device = {
-                                "id": device_id,
-                                "name": device_name,
-                                "ip": client_ip, # Store IP for automatic use in send dialog
-                                "connected_at": datetime.now()
-                            }
-
-                            # تحديث IP الهدف
-                            state["target_ip"] = client_ip
-                            save_config()
-                            if hasattr(app, 'home_ip_var'):
-                                app.root.after(0, lambda: app.home_ip_var.set(client_ip))
-
-                            app.root.after(0, lambda: app.update_device_history(device_id, device_name))
-                            app.root.after(0, app._update_status_display)
+                            app.root.after(0, lambda: _mark_connected(device_id, device_name, client_ip))
                             await websocket.send(json.dumps({"status": "paired"}))
                         else:
                             logger.warning(f"تم رفض اقتران الجهاز: {device_name}")
@@ -2032,11 +2143,11 @@ async def handle_client(websocket, path=None):
 
     # مسح حالة الجهاز فقط إذا لم يتبقَّ أي اتصال نشط من نفس الـ IP
     if remaining == 0 and connected_device and connected_device.get("ip") == client_ip:
-        logger.info(f"📴 تم قطع جميع الاتصالات مع {connected_device.get('name', '?')} ({client_ip})")
-        last_connection_time = datetime.now()
-        connected_device = None
+        logger.info(f"📴 تم قطع جميع اتصالات WS مع {connected_device.get('name', '?')} ({client_ip})")
+        # لا نمسح connected_device فوراً — نترك المراقب الدوري يقرر
+        # عبر فحص TCP إذا كان الجهاز لا يزال متاحاً
         if hasattr(app, 'root'):
-            app.root.after(0, app._update_status_display)
+            app.root.after(0, lambda: app._set_connection_state("unstable", connected_device))
 
 def show_notification(title: str, message: str):
     """
@@ -2138,9 +2249,10 @@ def udp_broadcast():
 
         while state["running"]:
             try:
-                # إعلان دوري كل 30 ثانية
+                # إعلان دوري: 15 ثانية عند وجود جهاز متصل، 30 ثانية بدون
+                announce_interval = 15 if connected_device else 30
                 now = time.time()
-                if now - last_announce >= 30:
+                if now - last_announce >= announce_interval:
                     msg = _response()
                     if subnet_bc:
                         try:
