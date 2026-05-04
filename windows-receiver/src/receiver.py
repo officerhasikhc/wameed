@@ -151,7 +151,15 @@ translations = {
         "status_verifying": "🔄 جاري التحقق من الاتصال...",
         "status_unstable": "🟡 اتصال غير مستقر مع {name}",
         "device_not_reachable": "الجهاز '{name}' مكتشف لكن غير متاح حالياً.\nتأكد من فتح تطبيق وميض على الهاتف وتفعيل الاستقبال.",
-        "connection_lost_notif": "تم فقدان الاتصال مع {name}"
+        "connection_lost_notif": "تم فقدان الاتصال مع {name}",
+        "diag_log_btn": "📋 سجل التشخيص",
+        "diag_net_btn": "🔧 تشخيص الشبكة",
+        "diag_open_log": "📂 فتح ملف السجل",
+        "diag_copy_log": "📋 نسخ السجل",
+        "diag_copy_results": "📋 نسخ النتائج",
+        "diag_run": "▶ تشغيل الفحص",
+        "diag_running": "جاري الفحص...",
+        "diag_title": "تشخيص الشبكة والسجل"
     },
     "en": {
         "app_header": "Wameed",
@@ -233,7 +241,15 @@ translations = {
         "status_verifying": "🔄 Verifying connection...",
         "status_unstable": "🟡 Unstable connection with {name}",
         "device_not_reachable": "Device '{name}' was discovered but is not reachable.\nMake sure the Wameed app is open on the phone with receiving enabled.",
-        "connection_lost_notif": "Connection lost with {name}"
+        "connection_lost_notif": "Connection lost with {name}",
+        "diag_log_btn": "📋 Diagnostic Log",
+        "diag_net_btn": "🔧 Network Diagnostics",
+        "diag_open_log": "📂 Open Log File",
+        "diag_copy_log": "📋 Copy Log",
+        "diag_copy_results": "📋 Copy Results",
+        "diag_run": "▶ Run Tests",
+        "diag_running": "Running tests...",
+        "diag_title": "Network Diagnostics & Log"
     }
 }
 
@@ -626,7 +642,7 @@ class WameedApp:
         """البحث التلقائي عن أول جهاز متاح وتحديده كهدف"""
         if not state.get("target_ip"):
             logger.info("Auto-discovery: searching for available devices...")
-            found = self._broadcast_discovery_multi(timeout=1.5)
+            found = self._broadcast_discovery_multi(timeout=3.0)
             if found:
                 device = found[0]
                 ip = device.get("ip")
@@ -758,7 +774,7 @@ class WameedApp:
             logger.info("بدء البحث عن أجهزة وميض في الشبكة (Broadcast)...")
 
             # البحث عن الأجهزة
-            found = self._broadcast_discovery_multi(timeout=1.5)
+            found = self._broadcast_discovery_multi(timeout=3.0)
 
             if found:
                 logger.info(f"تم العثور على {len(found)} أجهزة")
@@ -786,13 +802,13 @@ class WameedApp:
         # بدء البحث تلقائياً
         dialog.after(500, search_devices)
 
-    def _broadcast_discovery_multi(self, timeout=2.0):
-        """البحث عن عدة أجهزة"""
+    def _broadcast_discovery_multi(self, timeout=3.0):
+        """البحث عن عدة أجهزة — مع burst ودعم subnet broadcast للشبكات البطيئة"""
         devices = []
         try:
             sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-            sock.settimeout(timeout)
+            sock.settimeout(1.5)  # per-recv timeout, not total
 
             message = json.dumps({
                 "type": "discovery_ping",
@@ -801,7 +817,28 @@ class WameedApp:
                 "port": PORT_WS
             }).encode('utf-8')
 
-            sock.sendto(message, ('<broadcast>', PORT_UDP))
+            # Burst: إرسال 3 حزم broadcast متتالية لزيادة احتمالية الوصول
+            targets = [('<broadcast>', PORT_UDP), ('255.255.255.255', PORT_UDP)]
+            # إضافة subnet broadcast إذا متاح
+            try:
+                import netifaces
+                for iface in netifaces.interfaces():
+                    addrs = netifaces.ifaddresses(iface).get(netifaces.AF_INET, [])
+                    for a in addrs:
+                        bc = a.get('broadcast')
+                        if bc and bc not in ('255.255.255.255',):
+                            targets.append((bc, PORT_UDP))
+            except ImportError:
+                pass  # netifaces not available, use fallback
+
+            for i in range(3):
+                for target in targets:
+                    try:
+                        sock.sendto(message, target)
+                    except Exception:
+                        pass
+                if i < 2:
+                    time.sleep(0.2)
 
             start_time = time.time()
             seen_ips = set()
@@ -820,7 +857,15 @@ class WameedApp:
                                 "id": resp.get("device_id", "")
                             })
                 except socket.timeout:
-                    break
+                    # إعادة إرسال ping إذا لم يُعثر على أجهزة بعد
+                    if not devices and time.time() - start_time < timeout - 1:
+                        for target in targets:
+                            try:
+                                sock.sendto(message, target)
+                            except Exception:
+                                pass
+                    elif devices:
+                        break  # وجدنا أجهزة، لا حاجة للانتظار أكثر
                 except Exception as e:
                     logger.error(f"Discovery error: {e}")
 
@@ -830,7 +875,7 @@ class WameedApp:
 
         return devices
 
-    def _verify_device_connection(self, ip, port=7789, timeout=1.5):
+    def _verify_device_connection(self, ip, port=7789, timeout=3.0):
         """TCP reachability check — verifies the phone's WS server is actually accepting connections"""
         try:
             s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -985,7 +1030,7 @@ class WameedApp:
     def _quick_connect(self, device_id, device_name):
         """اتصال سريع بجهاز موثوق"""
         # البحث عن IP الجهاز
-        found_devices = self._broadcast_discovery_multi(timeout=2.0)
+        found_devices = self._broadcast_discovery_multi(timeout=3.0)
         target_device = None
 
         for d in found_devices:
@@ -1019,7 +1064,7 @@ class WameedApp:
         if not target_ip:
             # محاولة البحث عن الجهاز في الشبكة
             logger.info(f"Quick send: searching for {device_name}...")
-            found = self._broadcast_discovery_multi(timeout=1.5)
+            found = self._broadcast_discovery_multi(timeout=3.0)
             for d in found:
                 if d.get("name") == device_name:
                     target_ip = d.get("ip")
@@ -1185,6 +1230,263 @@ class WameedApp:
 
         tk.Button(container, text=t("delete_device"), command=self.remove_device,
                   bg="#FEE2E2", fg="#991B1B", bd=0, pady=5, font=(FONT_AR, fs(9))).pack(anchor="e" if LANG=="ar" else "w", pady=5)
+
+        ttk.Separator(container).pack(fill="x", pady=15)
+
+        # =================== Diagnostics Section ===================
+        tk.Label(container, text=t("diag_title"), bg="white", font=(FONT_AR, fs(10), "bold")).pack(anchor="e" if LANG=="ar" else "w", pady=(5, 2))
+
+        diag_frame = tk.Frame(container, bg="white")
+        diag_frame.pack(fill="x", pady=5)
+
+        tk.Button(diag_frame, text=t("diag_open_log"), command=self._open_log_file,
+                  bg="#EFF6FF", fg="#1E40AF", font=(FONT_AR, fs(9)), bd=0, pady=6, padx=12,
+                  cursor="hand2").pack(side="right" if LANG=="ar" else "left", padx=3)
+
+        tk.Button(diag_frame, text=t("diag_log_btn"), command=self._show_log_viewer,
+                  bg="#F0FDF4", fg="#166534", font=(FONT_AR, fs(9)), bd=0, pady=6, padx=12,
+                  cursor="hand2").pack(side="right" if LANG=="ar" else "left", padx=3)
+
+        tk.Button(diag_frame, text=t("diag_net_btn"), command=self._show_network_diagnostics,
+                  bg="#FFF7ED", fg="#9A3412", font=(FONT_AR, fs(9)), bd=0, pady=6, padx=12,
+                  cursor="hand2").pack(side="right" if LANG=="ar" else "left", padx=3)
+
+    def _open_log_file(self):
+        """فتح مجلد السجل"""
+        try:
+            os.startfile(LOCAL_LOG_DIR)
+        except Exception as e:
+            logger.error(f"Failed to open log dir: {e}")
+
+    def _show_log_viewer(self):
+        """عارض سجل مدمج"""
+        dialog = tk.Toplevel(self.root)
+        dialog.title(t("diag_log_btn"))
+        dialog.geometry("700x500")
+        dialog.configure(bg="white")
+
+        # Header
+        header = tk.Frame(dialog, bg="#F0FDF4", pady=8)
+        header.pack(fill="x")
+        tk.Label(header, text=t("diag_log_btn"), bg="#F0FDF4", fg="#166534",
+                 font=(FONT_AR, fs(12), "bold")).pack(side="right" if LANG=="ar" else "left", padx=15)
+
+        btn_frame = tk.Frame(header, bg="#F0FDF4")
+        btn_frame.pack(side="left" if LANG=="ar" else "right", padx=15)
+
+        def copy_log():
+            content = log_text.get("1.0", tk.END)
+            dialog.clipboard_clear()
+            dialog.clipboard_append(content)
+            logger.info("Log copied to clipboard")
+
+        def refresh_log():
+            log_text.config(state="normal")
+            log_text.delete("1.0", tk.END)
+            try:
+                with open(LOG_FILE, "r", encoding="utf-8") as f:
+                    lines = f.readlines()
+                    # Show last 200 lines
+                    for line in lines[-200:]:
+                        line = line.rstrip()
+                        if "| ERROR |" in line:
+                            log_text.insert(tk.END, line + "\n", "error")
+                        elif "| WARNING |" in line:
+                            log_text.insert(tk.END, line + "\n", "warning")
+                        else:
+                            log_text.insert(tk.END, line + "\n")
+            except Exception as e:
+                log_text.insert(tk.END, f"Error reading log: {e}")
+            log_text.config(state="disabled")
+            log_text.see(tk.END)
+
+        tk.Button(btn_frame, text=t("diag_copy_log"), command=copy_log,
+                  bg="#E2E8F0", fg="#1E293B", font=(FONT_AR, fs(8)), bd=0, pady=3, padx=8,
+                  cursor="hand2").pack(side="left", padx=3)
+        tk.Button(btn_frame, text="🔄", command=refresh_log,
+                  bg="#E2E8F0", fg="#1E293B", font=(FONT_AR, fs(8)), bd=0, pady=3, padx=8,
+                  cursor="hand2").pack(side="left", padx=3)
+
+        # Log text
+        log_text = tk.Text(dialog, wrap="word", font=("Consolas", fs(9)),
+                          bg="#1E293B", fg="#E2E8F0", insertbackground="#E2E8F0",
+                          bd=0, padx=10, pady=10)
+        log_text.tag_configure("error", foreground="#EF4444")
+        log_text.tag_configure("warning", foreground="#F59E0B")
+        scrollbar = tk.Scrollbar(dialog, command=log_text.yview)
+        log_text.configure(yscrollcommand=scrollbar.set)
+        scrollbar.pack(side="right", fill="y")
+        log_text.pack(fill="both", expand=True)
+
+        refresh_log()
+
+    def _show_network_diagnostics(self):
+        """أداة تشخيص شبكة مدمجة"""
+        dialog = tk.Toplevel(self.root)
+        dialog.title(t("diag_net_btn"))
+        dialog.geometry("600x550")
+        dialog.configure(bg="white")
+
+        # Header
+        header = tk.Frame(dialog, bg="#FFF7ED", pady=8)
+        header.pack(fill="x")
+        tk.Label(header, text=t("diag_net_btn"), bg="#FFF7ED", fg="#9A3412",
+                 font=(FONT_AR, fs(12), "bold")).pack(side="right" if LANG=="ar" else "left", padx=15)
+
+        # Results area
+        results_text = tk.Text(dialog, wrap="word", font=("Consolas", fs(9)),
+                              bg="#1E293B", fg="#E2E8F0", insertbackground="#E2E8F0",
+                              bd=0, padx=10, pady=10, state="disabled")
+        results_text.tag_configure("pass", foreground="#22C55E")
+        results_text.tag_configure("fail", foreground="#EF4444")
+        results_text.tag_configure("info", foreground="#60A5FA")
+        results_text.tag_configure("header", foreground="#F59E0B", font=("Consolas", fs(10), "bold"))
+
+        def run_diagnostics():
+            results_text.config(state="normal")
+            results_text.delete("1.0", tk.END)
+            results_text.insert(tk.END, "=== Wameed Network Diagnostics ===\n", "header")
+            results_text.insert(tk.END, f"Time: {time.strftime('%Y-%m-%d %H:%M:%S')}\n", "info")
+            results_text.insert(tk.END, f"Version: {VERSION}\n\n", "info")
+
+            # 1. Local network info
+            results_text.insert(tk.END, "--- Local Network ---\n", "header")
+            try:
+                hostname = socket.gethostname()
+                local_ip = socket.gethostbyname(hostname)
+                results_text.insert(tk.END, f"Hostname: {hostname}\n")
+                results_text.insert(tk.END, f"Local IP: {local_ip}\n")
+            except Exception as e:
+                results_text.insert(tk.END, f"Error getting local info: {e}\n", "fail")
+
+            # 2. Check ports
+            results_text.insert(tk.END, f"\n--- Port Status ---\n", "header")
+
+            # Check WS port
+            try:
+                test_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                test_sock.settimeout(1)
+                result = test_sock.connect_ex(('127.0.0.1', PORT_WS))
+                test_sock.close()
+                if result == 0:
+                    results_text.insert(tk.END, f"✅ Port {PORT_WS} (WebSocket): OPEN\n", "pass")
+                else:
+                    results_text.insert(tk.END, f"❌ Port {PORT_WS} (WebSocket): CLOSED\n", "fail")
+            except Exception as e:
+                results_text.insert(tk.END, f"❌ Port {PORT_WS}: Error - {e}\n", "fail")
+
+            # Check UDP port
+            try:
+                udp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                udp_sock.bind(('', PORT_UDP))
+                udp_sock.close()
+                results_text.insert(tk.END, f"✅ Port {PORT_UDP} (UDP Discovery): AVAILABLE\n", "pass")
+            except OSError:
+                results_text.insert(tk.END, f"✅ Port {PORT_UDP} (UDP Discovery): IN USE (OK - server running)\n", "pass")
+            except Exception as e:
+                results_text.insert(tk.END, f"❌ Port {PORT_UDP} (UDP): Error - {e}\n", "fail")
+
+            # 3. Target device test
+            target_ip = state.get("target_ip", "")
+            if target_ip:
+                results_text.insert(tk.END, f"\n--- Target Device ({target_ip}) ---\n", "header")
+
+                # TCP test
+                try:
+                    start = time.time()
+                    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                    s.settimeout(3)
+                    s.connect((target_ip, 7789))
+                    s.close()
+                    elapsed = int((time.time() - start) * 1000)
+                    results_text.insert(tk.END, f"✅ TCP {target_ip}:7789 — {elapsed}ms\n", "pass")
+                except Exception as e:
+                    results_text.insert(tk.END, f"❌ TCP {target_ip}:7789 — {e}\n", "fail")
+
+                # ICMP Ping (Windows has ping command)
+                try:
+                    import subprocess
+                    result = subprocess.run(
+                        ["ping", "-n", "1", "-w", "3000", target_ip],
+                        capture_output=True, text=True, timeout=5
+                    )
+                    if result.returncode == 0:
+                        # Extract time from ping output
+                        for line in result.stdout.split('\n'):
+                            if 'time=' in line.lower() or 'وقت=' in line:
+                                results_text.insert(tk.END, f"✅ ICMP Ping: {line.strip()}\n", "pass")
+                                break
+                        else:
+                            results_text.insert(tk.END, f"✅ ICMP Ping: OK\n", "pass")
+                    else:
+                        results_text.insert(tk.END, f"❌ ICMP Ping: No response\n", "fail")
+                except Exception as e:
+                    results_text.insert(tk.END, f"❌ ICMP Ping: {e}\n", "fail")
+
+                # UDP Discovery test
+                results_text.insert(tk.END, f"\n--- UDP Discovery Test ---\n", "header")
+                try:
+                    start = time.time()
+                    test_found = self._broadcast_discovery_multi(timeout=2.0)
+                    elapsed = int((time.time() - start) * 1000)
+                    if test_found:
+                        for d in test_found:
+                            results_text.insert(tk.END,
+                                f"✅ Found: {d['name']} ({d['ip']}) — {elapsed}ms\n", "pass")
+                    else:
+                        results_text.insert(tk.END, f"❌ No devices found ({elapsed}ms)\n", "fail")
+                except Exception as e:
+                    results_text.insert(tk.END, f"❌ Discovery: {e}\n", "fail")
+            else:
+                results_text.insert(tk.END, f"\n--- No target device configured ---\n", "info")
+                # Still run discovery
+                results_text.insert(tk.END, f"\n--- UDP Discovery Test ---\n", "header")
+                try:
+                    start = time.time()
+                    test_found = self._broadcast_discovery_multi(timeout=2.0)
+                    elapsed = int((time.time() - start) * 1000)
+                    if test_found:
+                        for d in test_found:
+                            results_text.insert(tk.END,
+                                f"✅ Found: {d['name']} ({d['ip']}) — {elapsed}ms\n", "pass")
+                    else:
+                        results_text.insert(tk.END, f"❌ No devices found ({elapsed}ms)\n", "fail")
+                except Exception as e:
+                    results_text.insert(tk.END, f"❌ Discovery: {e}\n", "fail")
+
+            # 4. Firewall hint
+            results_text.insert(tk.END, f"\n--- Firewall Note ---\n", "header")
+            results_text.insert(tk.END, "If tests fail, check Windows Firewall:\n")
+            results_text.insert(tk.END, f"  - Allow inbound TCP on port {PORT_WS}\n")
+            results_text.insert(tk.END, f"  - Allow inbound/outbound UDP on port {PORT_UDP}\n")
+            results_text.insert(tk.END, "  - Allow Python through the firewall\n")
+
+            results_text.insert(tk.END, f"\n{'='*40}\n", "header")
+            results_text.config(state="disabled")
+            results_text.see(tk.END)
+            logger.info("Network diagnostics completed")
+
+        def copy_results():
+            content = results_text.get("1.0", tk.END)
+            dialog.clipboard_clear()
+            dialog.clipboard_append(content)
+
+        # Buttons
+        btn_bar = tk.Frame(dialog, bg="white", pady=8)
+        btn_bar.pack(fill="x", padx=15)
+
+        tk.Button(btn_bar, text=t("diag_run"), command=lambda: threading.Thread(target=run_diagnostics, daemon=True).start(),
+                  bg="#2E7D32", fg="white", font=(FONT_AR, fs(9), "bold"), bd=0, pady=6, padx=15,
+                  cursor="hand2").pack(side="right" if LANG=="ar" else "left", padx=3)
+
+        tk.Button(btn_bar, text=t("diag_copy_results"), command=copy_results,
+                  bg="#E2E8F0", fg="#1E293B", font=(FONT_AR, fs(9)), bd=0, pady=6, padx=15,
+                  cursor="hand2").pack(side="right" if LANG=="ar" else "left", padx=3)
+
+        scrollbar = tk.Scrollbar(dialog, command=results_text.yview)
+        results_text.configure(yscrollcommand=scrollbar.set)
+        scrollbar.pack(side="right", fill="y")
+        results_text.pack(fill="both", expand=True, padx=5, pady=5)
 
     def _broadcast_discovery(self, timeout=2.0):
         """يرسل رسالة UDP Broadcast للبحث عن الهواتف التي تشغل تطبيق وميض"""
@@ -1555,12 +1857,12 @@ class WameedApp:
                     try:
                         uri = f"ws://{ip}:7789"
                         # ملاحظة: تم تغيير connect_timeout إلى open_timeout لتوافق مكتبة websockets
-                        async with websockets.connect(uri, open_timeout=10, ping_interval=5, ping_timeout=10) as ws:
+                        async with websockets.connect(uri, open_timeout=15, ping_interval=5, ping_timeout=10) as ws:
                             # Hello
                             await ws.send(json.dumps({"type":"hello", "device":socket.gethostname(), "device_id":"pc_client", "app_version":VERSION}))
 
                             # استلام الرد مع مهلة زمنية
-                            resp_raw = await asyncio.wait_for(ws.recv(), timeout=10)
+                            resp_raw = await asyncio.wait_for(ws.recv(), timeout=15)
                             resp = json.loads(resp_raw)
 
                             if resp.get("status") != "paired":
@@ -1665,7 +1967,7 @@ class WameedApp:
             try:
                 uri = f"ws://{ip}:7789"
                 # ملاحظة: تم تغيير connect_timeout إلى open_timeout لتوافق مكتبة websockets
-                async with websockets.connect(uri, open_timeout=5) as websocket:
+                async with websockets.connect(uri, open_timeout=10) as websocket:
                     # إرسال hello
                     await websocket.send(json.dumps({
                         "type": "hello",
@@ -1674,7 +1976,7 @@ class WameedApp:
                         "app_version": VERSION
                     }))
 
-                    resp_raw = await asyncio.wait_for(websocket.recv(), timeout=5)
+                    resp_raw = await asyncio.wait_for(websocket.recv(), timeout=10)
                     resp = json.loads(resp_raw)
                     if resp.get("status") != "paired":
                         logger.warning(f"تم رفض إرسال النص من الهاتف ({ip})")

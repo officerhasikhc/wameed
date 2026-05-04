@@ -199,4 +199,28 @@
     <string name="attached_files">الملفات المرفقة (%d)</string>
     <string name="status_connected_to">متصل بـ {name}</string>
     <string name="send_all">إرسال الكل</string>
+
+    <!-- سجل التشخيص وأدوات الشبكة -->
+    <string name="diag_log_title">سجل التشخيص</string>
+    <string name="diag_log_detail">عرض سجل الأحداث والأخطاء للتشخيص عن بُعد</string>
+    <string name="diag_share_log">📤 مشاركة السجل</string>
+    <string name="diag_clear_log">🗑️ مسح السجل</string>
+    <string name="diag_filter_all">الكل</string>
+    <string name="diag_filter_errors">أخطاء</string>
+    <string name="diag_filter_network">شبكة</string>
+    <string name="diag_filter_warnings">تحذيرات</string>
+    <string name="diag_empty_log">السجل فارغ</string>
+    <string name="diag_net_title">تشخيص الشبكة</string>
+    <string name="diag_net_detail">فحص الاتصال وتشخيص المشاكل</string>
+    <string name="diag_run_tests">▶ تشغيل الفحص</string>
+    <string name="diag_running">جاري الفحص&#8230;</string>
+    <string name="diag_wifi_info">معلومات WiFi</string>
+    <string name="diag_test_udp">فحص UDP Discovery</string>
+    <string name="diag_test_tcp">فحص TCP</string>
+    <string name="diag_test_ping">فحص ICMP Ping</string>
+    <string name="diag_test_ws">فحص WebSocket</string>
+    <string name="diag_passed">✅ نجح (%dms)</string>
+    <string name="diag_failed">❌ فشل: %s</string>
+    <string name="diag_share_results">📤 مشاركة النتائج</string>
+    <string name="diag_fix_hint">🔧 تشخيص المشكلة</string>
 </resources>

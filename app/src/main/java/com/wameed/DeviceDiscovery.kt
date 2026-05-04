@@ -38,8 +38,9 @@ class DeviceDiscovery {
     /**
      * يبدأ الاستماع لمدة محددة (بالثواني) — يعمل في Thread منفصل
      */
-    fun startListening(context: android.content.Context, timeoutSeconds: Int = 6, callback: DiscoveryCallback) {
+    fun startListening(context: android.content.Context, timeoutSeconds: Int = 10, callback: DiscoveryCallback) {
         Log.i(TAG, "بدء البحث عن أجهزة (UDP) لمدة $timeoutSeconds ثوانٍ...")
+        WameedLogger.net(TAG, "بدء بحث UDP لمدة ${timeoutSeconds}s")
         stop()
         listening = true
 
@@ -50,7 +51,7 @@ class DeviceDiscovery {
                     reuseAddress = true
                     bind(InetSocketAddress(0)) // bind to any available port
                     broadcast = true
-                    soTimeout = 2000 // 2s timeout per receive cycle
+                    soTimeout = 3000 // 3s timeout per receive cycle (slow networks)
                 }
                 currentSocket = socket
                 Log.d(TAG, "تم فتح Socket للاكتشاف على المنفذ المحلي: ${socket.localPort}")
@@ -59,8 +60,14 @@ class DeviceDiscovery {
                 val seen = mutableSetOf<String>()
                 val deadline = System.currentTimeMillis() + timeoutSeconds * 1000L
 
-                // إرسال broadcast ping لتفعيل استجابة الكمبيوتر
-                sendDiscoveryPing(socket)
+                // Burst: إرسال 3 حزم broadcast متتالية لزيادة احتمالية الوصول في الشبكات البطيئة
+                repeat(3) { i ->
+                    sendDiscoveryPing(socket)
+                    if (i < 2) Thread.sleep(200)
+                }
+                Log.d(TAG, "تم إرسال burst اكتشاف (3 حزم)")
+
+                var lastPingTime = System.currentTimeMillis()
 
                 while (listening && System.currentTimeMillis() < deadline) {
                     try {
@@ -81,6 +88,7 @@ class DeviceDiscovery {
                                 seen.add(key)
                                 val device = DiscoveredDevice(name, ip, port)
                                 Log.i(TAG, "✅ اكتشاف جهاز جديد: $name ($ip:$port)")
+                                WameedLogger.i(TAG, "اكتشاف جهاز: $name ($ip:$port)")
                                 callback.onDeviceFound(device)
                             } else {
                                 Log.v(TAG, "تجاهل جهاز مكتشف مسبقاً: $key")
@@ -89,10 +97,12 @@ class DeviceDiscovery {
                             Log.v(TAG, "تجاهل حزمة غير تابعة لخدمة وميض")
                         }
                     } catch (_: SocketTimeoutException) {
-                        // أعد إرسال ping كل دورة timeout للبحث مجدداً
-                        if (listening && System.currentTimeMillis() < deadline) {
-                            Log.v(TAG, "انتهاء مهلة الاستقبال، إعادة إرسال Ping للاكتشاف...")
+                        // إعادة إرسال ping كل 2.5 ثانية للبحث مجدداً
+                        val now = System.currentTimeMillis()
+                        if (listening && now < deadline && (now - lastPingTime) >= 2500) {
+                            Log.v(TAG, "إعادة إرسال Ping للاكتشاف...")
                             sendDiscoveryPing(socket)
+                            lastPingTime = now
                         }
                     } catch (e: Exception) {
                         Log.e(TAG, "❌ خطأ في قراءة حزمة الاكتشاف", e)
@@ -101,6 +111,7 @@ class DeviceDiscovery {
                 Log.i(TAG, "انتهت فترة البحث عن الأجهزة")
             } catch (e: Exception) {
                 Log.e(TAG, "❌ فشل بدء عملية الاكتشاف", e)
+                WameedLogger.e(TAG, "فشل الاكتشاف: ${e.message}")
                 callback.onError(context.getString(R.string.error_discovery_failed, e.message ?: ""))
             } finally {
                 socket?.close()
@@ -177,7 +188,7 @@ class DeviceDiscovery {
 
     companion object {
         /** Fast TCP reachability check — used as liveness probe. */
-        fun isTcpReachable(ip: String, port: Int, timeoutMs: Int = 600): Boolean {
+        fun isTcpReachable(ip: String, port: Int, timeoutMs: Int = 1500): Boolean {
             return try {
                 Socket().use { s ->
                     s.connect(InetSocketAddress(ip, port), timeoutMs)

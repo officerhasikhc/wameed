@@ -22,7 +22,7 @@ class WameedSender(private val context: Context) {
     companion object {
         // محرك اتصال واحد لسرعة البرق — مهلات كبيرة للملفات الضخمة
         private val client = OkHttpClient.Builder()
-            .connectTimeout(1500, TimeUnit.MILLISECONDS)
+            .connectTimeout(3000, TimeUnit.MILLISECONDS)
             .readTimeout(10, TimeUnit.MINUTES)
             .writeTimeout(10, TimeUnit.MINUTES)
             .pingInterval(15, TimeUnit.SECONDS)
@@ -40,7 +40,7 @@ class WameedSender(private val context: Context) {
         private val persistentLock = Any()
 
         /** Fast TCP reachability check before opening a WebSocket. */
-        private fun isTcpReachable(ip: String, port: Int, timeoutMs: Int = 800): Boolean {
+        private fun isTcpReachable(ip: String, port: Int, timeoutMs: Int = 2000): Boolean {
             return try {
                 Socket().use { s ->
                     s.connect(InetSocketAddress(ip, port), timeoutMs)
@@ -52,7 +52,7 @@ class WameedSender(private val context: Context) {
         /** Best-effort host liveness (ICMP). Used to distinguish "PC off" vs
          *  "PC on but Wameed crashed". May return false on some networks that
          *  block ICMP even if the host is up — so this is only a hint. */
-        private fun isHostReachable(ip: String, timeoutMs: Int = 1000): Boolean {
+        private fun isHostReachable(ip: String, timeoutMs: Int = 2000): Boolean {
             return try {
                 java.net.InetAddress.getByName(ip).isReachable(timeoutMs)
             } catch (_: Exception) { false }
@@ -78,10 +78,12 @@ class WameedSender(private val context: Context) {
 
                 val wsUrl = "ws://$ip:$port"
                 Log.i("WameedSender", "⚡ فتح اتصال دائم: $wsUrl")
+                WameedLogger.net("WameedSender", "فتح اتصال دائم: $wsUrl")
                 val request = Request.Builder().url(wsUrl).build()
                 persistentWs = client.newWebSocket(request, object : WebSocketListener() {
                     override fun onOpen(webSocket: WebSocket, response: Response) {
                         Log.i("WameedSender", "⚡ Persistent WS مفتوح، إرسال hello")
+                        WameedLogger.net("WameedSender", "Persistent WS مفتوح")
                         val hello = JSONObject().apply {
                             put("type", "hello")
                             put("device", WameedPrefs.getDeviceName())
@@ -98,6 +100,7 @@ class WameedSender(private val context: Context) {
                                 "paired", "hello" -> {
                                     persistentPaired = true
                                     Log.i("WameedSender", "⚡ Persistent WS مقترن وجاهز")
+                                    WameedLogger.i("WameedSender", "Persistent WS مقترن وجاهز")
                                 }
                                 "rejected" -> {
                                     Log.w("WameedSender", "⚡ Persistent WS مرفوض")
@@ -109,6 +112,7 @@ class WameedSender(private val context: Context) {
 
                     override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
                         Log.w("WameedSender", "⚡ Persistent WS فشل: ${t.message}")
+                        WameedLogger.e("WameedSender", "Persistent WS فشل: ${t.message}")
                         synchronized(persistentLock) {
                             persistentWs = null
                             persistentPaired = false
@@ -179,9 +183,11 @@ class WameedSender(private val context: Context) {
         val port = WameedPrefs.getPcPort(context)
 
         Log.i(TAG, "محاولة الاتصال (Ping) بـ $ip:$port")
+        WameedLogger.net(TAG, "محاولة اتصال (Ping) بـ $ip:$port")
 
         if (ip.isEmpty()) {
             Log.w(TAG, "فشل الإرسال: لم يتم تكوين عنوان IP للكمبيوتر")
+            WameedLogger.w(TAG, "لم يتم تكوين عنوان IP")
             callback.onError(context.getString(R.string.error_pc_not_configured))
             return
         }
@@ -246,6 +252,7 @@ class WameedSender(private val context: Context) {
                         }
                         "paired", "hello" -> {
                             Log.i(TAG, "✅ تم الاتصال بنجاح مع $ip")
+                            WameedLogger.i(TAG, "✅ تم الاتصال بنجاح مع $ip")
                             if (finishedFlag.compareAndSet(false, true)) {
                                 markSendSuccess()
                                 callback.onSuccess(context.getString(R.string.status_connected))
@@ -268,6 +275,7 @@ class WameedSender(private val context: Context) {
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                WameedLogger.e(TAG, "فشل WebSocket ($ip): ${t.javaClass.simpleName} — ${t.message}")
                 if (finishedFlag.compareAndSet(false, true)) {
                     val msg = when {
                         t is java.net.ConnectException -> context.getString(R.string.error_connect_failed)

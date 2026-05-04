@@ -68,7 +68,7 @@ class WameedConnectionService : Service() {
 
     private val httpClient: OkHttpClient by lazy {
         OkHttpClient.Builder()
-            .connectTimeout(1500, TimeUnit.MILLISECONDS)
+            .connectTimeout(3000, TimeUnit.MILLISECONDS)
             .readTimeout(60, TimeUnit.SECONDS)
             .writeTimeout(10, TimeUnit.SECONDS)
             .pingInterval(20, TimeUnit.SECONDS)
@@ -165,6 +165,7 @@ class WameedConnectionService : Service() {
         super.onCreate()
         isRunning = true
         createChannel()
+        WameedLogger.i(TAG, "Service created")
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -325,6 +326,7 @@ class WameedConnectionService : Service() {
         try { ws?.close(1000, "service stop") } catch (_: Exception) {}
         ws = null
         Log.i(TAG, "Service destroyed")
+        WameedLogger.i(TAG, "Service destroyed")
     }
 
     // ------------------------- Discovery -------------------------
@@ -386,6 +388,7 @@ class WameedConnectionService : Service() {
         ws = httpClient.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
                 Log.i(TAG, "WS open — sending hello")
+                WameedLogger.net(TAG, "WS open → $url")
                 val deviceName = WameedPrefs.getDeviceName()
                 val hello = JSONObject().apply {
                     put("type", "hello")
@@ -409,6 +412,7 @@ class WameedConnectionService : Service() {
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
                 Log.w(TAG, "WS failure: ${t.message}")
+                WameedLogger.e(TAG, "WS failure: ${t.javaClass.simpleName} — ${t.message}")
                 ws = null
                 pingFailures++
                 // Debounce: delay ServiceStatus(false) by 3s to avoid UI flicker
@@ -422,6 +426,7 @@ class WameedConnectionService : Service() {
                 if (pingFailures >= MAX_PING_FAILURES) {
                     if (!isDiscovering) {
                         Log.i(TAG, "Connection lost to $pcDisplay. Starting background discovery...")
+                        WameedLogger.w(TAG, "فقد الاتصال بـ $pcDisplay — بدء البحث")
                         startBackgroundDiscovery()
                     } else {
                         Log.d(TAG, "Already discovering or PC is offline.")

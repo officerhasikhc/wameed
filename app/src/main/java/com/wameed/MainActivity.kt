@@ -17,6 +17,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.rememberScrollState
@@ -63,6 +64,7 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.RadioButtonDefaults
@@ -76,6 +78,7 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.material.icons.filled.Update
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.NetworkCheck
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -136,6 +139,9 @@ class MainActivity : ComponentActivity() {
         
         // تهيئة نظام تتبع الأخطاء
         WameedCrashReporter.initialize(this)
+        
+        // تهيئة سجل التشخيص
+        WameedLogger.init(this)
         
         // تشغيل خدمة الخلفية فوراً لضمان جاهزية الاستقبال
         WameedConnectionService.start(this)
@@ -398,7 +404,7 @@ fun MainScreen(sender: WameedSender, discovery: DeviceDiscovery, updateManager: 
         }
         val ip = WameedPrefs.getPcIp(context)
         val port = WameedPrefs.getPcPort(context)
-        val tcpOk = withContextIO { DeviceDiscovery.isTcpReachable(ip, port, 800) }
+        val tcpOk = withContextIO { DeviceDiscovery.isTcpReachable(ip, port, 1500) }
         val recentSend = WameedPrefs.getLastSendInfo(context)
             ?.takeIf { (System.currentTimeMillis() - it.first) < 120_000 }
 
@@ -437,7 +443,7 @@ fun MainScreen(sender: WameedSender, discovery: DeviceDiscovery, updateManager: 
                     statusText = context.getString(R.string.pc_unavailable)
                     // Retry TCP once after a short delay before declaring failure
                     delay(2000)
-                    val retryOk = withContextIO { DeviceDiscovery.isTcpReachable(ip, port, 800) }
+                    val retryOk = withContextIO { DeviceDiscovery.isTcpReachable(ip, port, 1500) }
                     if (retryOk) {
                         connectionState = ConnectionState.Connected
                         val friendly = WameedPrefs.getPcName(context)
@@ -507,7 +513,7 @@ fun MainScreen(sender: WameedSender, discovery: DeviceDiscovery, updateManager: 
         while (connectionState == ConnectionState.Connected || connectionState == ConnectionState.Discovered) {
             delay(10_000)
             val dev = selectedDevice ?: break
-            val alive = withContextIO { DeviceDiscovery.isTcpReachable(dev.ip, dev.port, 1000) }
+            val alive = withContextIO { DeviceDiscovery.isTcpReachable(dev.ip, dev.port, 2000) }
             if (alive) {
                 failures = 0
                 if (connectionState == ConnectionState.Discovered) {
@@ -585,12 +591,21 @@ fun MainScreen(sender: WameedSender, discovery: DeviceDiscovery, updateManager: 
                 selectedUris = selectedUris,
                 onRemoveUri = { selectedUris.remove(it) },
                 onConfirmSend = { sendSelectedFiles() },
-                isSendingBatch = isSendingBatch
+                isSendingBatch = isSendingBatch,
+                onDiagnose = { selectedTab = 6 }
             )
             1 -> HistoryTab(modifier = Modifier.padding(padding))
             2 -> ReceivedTab(modifier = Modifier.padding(padding))
-            3 -> SettingsTab(modifier = Modifier.padding(padding), updateManager = updateManager, onShowTrusted = { selectedTab = 4 })
+            3 -> SettingsTab(
+                modifier = Modifier.padding(padding),
+                updateManager = updateManager,
+                onShowTrusted = { selectedTab = 4 },
+                onShowDiagLog = { selectedTab = 5 },
+                onShowNetDiag = { selectedTab = 6 }
+            )
             4 -> TrustedDevicesTab(modifier = Modifier.padding(padding), onBack = { selectedTab = 3 })
+            5 -> DiagLogScreen(onBack = { selectedTab = 3 })
+            6 -> NetworkDiagScreen(onBack = { selectedTab = 3 })
         }
     }
 
@@ -657,7 +672,8 @@ fun ConnectionTab(
     selectedUris: List<Uri> = emptyList(),
     onRemoveUri: (Uri) -> Unit = {},
     onConfirmSend: () -> Unit = {},
-    isSendingBatch: Boolean = false
+    isSendingBatch: Boolean = false,
+    onDiagnose: () -> Unit = {}
 ) {
     val scrollState = rememberScrollState()
 
@@ -788,13 +804,23 @@ fun ConnectionTab(
         }
 
         if (connectionState == ConnectionState.Failed) {
-            Button(onClick = { selectedDevice?.let { onConnect(it) } ?: onRefresh() },
-                modifier = Modifier.fillMaxWidth(),
-                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFEF4444)),
-                shape = RoundedCornerShape(16.dp)) {
-                Icon(Icons.Default.Refresh, null, Modifier.size(18.dp))
-                Spacer(Modifier.width(8.dp))
-                Text(stringResource(R.string.quick_action_refresh))
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(onClick = { selectedDevice?.let { onConnect(it) } ?: onRefresh() },
+                    modifier = Modifier.weight(1f),
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFEF4444)),
+                    shape = RoundedCornerShape(16.dp)) {
+                    Icon(Icons.Default.Refresh, null, Modifier.size(18.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text(stringResource(R.string.quick_action_refresh))
+                }
+                OutlinedButton(onClick = onDiagnose,
+                    modifier = Modifier.weight(1f),
+                    shape = RoundedCornerShape(16.dp),
+                    border = BorderStroke(1.dp, Color(0xFF3B82F6))) {
+                    Icon(Icons.Default.NetworkCheck, null, Modifier.size(18.dp), tint = Color(0xFF3B82F6))
+                    Spacer(Modifier.width(6.dp))
+                    Text(stringResource(R.string.diag_fix_hint), color = Color(0xFF3B82F6), fontSize = 12.sp)
+                }
             }
             Spacer(Modifier.height(8.dp))
         }
@@ -1161,7 +1187,7 @@ private fun getMimeType(filename: String): String {
 }
 
 @Composable
-fun SettingsTab(modifier: Modifier, updateManager: WameedUpdateManager, onShowTrusted: () -> Unit) {
+fun SettingsTab(modifier: Modifier, updateManager: WameedUpdateManager, onShowTrusted: () -> Unit, onShowDiagLog: () -> Unit = {}, onShowNetDiag: () -> Unit = {}) {
     val context = LocalContext.current
     var displayMode by remember { mutableStateOf(WameedPrefs.getDisplayMode(context)) }
 
@@ -1387,6 +1413,52 @@ fun SettingsTab(modifier: Modifier, updateManager: WameedUpdateManager, onShowTr
                         fontSize = 12.sp, color = Color.Gray)
                 }
                 Icon(Icons.Default.BugReport, null, tint = Color(0xFF2E7D32))
+            }
+        }
+
+        Spacer(Modifier.height(16.dp))
+
+        // سجل التشخيص
+        Surface(Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp),
+            color = Color.White, shadowElevation = 1.dp) {
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .clickable { onShowDiagLog() }
+                    .padding(18.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text(stringResource(R.string.diag_log_title),
+                        fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                    Spacer(Modifier.height(4.dp))
+                    Text(stringResource(R.string.diag_log_detail),
+                        fontSize = 12.sp, color = Color.Gray)
+                }
+                Icon(Icons.AutoMirrored.Filled.List, null, tint = Color(0xFF3B82F6))
+            }
+        }
+
+        Spacer(Modifier.height(12.dp))
+
+        // تشخيص الشبكة
+        Surface(Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp),
+            color = Color.White, shadowElevation = 1.dp) {
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .clickable { onShowNetDiag() }
+                    .padding(18.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text(stringResource(R.string.diag_net_title),
+                        fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                    Spacer(Modifier.height(4.dp))
+                    Text(stringResource(R.string.diag_net_detail),
+                        fontSize = 12.sp, color = Color.Gray)
+                }
+                Icon(Icons.Default.NetworkCheck, null, tint = Color(0xFF2E7D32))
             }
         }
 

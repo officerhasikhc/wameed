@@ -2,4 +2,6 @@
 <paths>
     <!-- مسار ملفات التحديث المؤقتة -->
     <cache-path name="updates" path="updates/" />
+    <!-- مسار سجل التشخيص -->
+    <files-path name="logs" path="." />
 </paths>
