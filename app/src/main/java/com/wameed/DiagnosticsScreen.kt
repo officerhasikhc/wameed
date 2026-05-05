@@ -1,8 +1,12 @@
 package com.wameed
 
+import android.content.ClipData
 import android.content.Context
+import android.content.Intent
 import android.net.wifi.WifiManager
 import android.util.Log
+import android.widget.Toast
+import androidx.core.content.FileProvider
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -32,11 +36,17 @@ import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import org.json.JSONObject
+import java.io.File
 import java.net.DatagramPacket
 import java.net.DatagramSocket
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.Socket
+import java.net.ConnectException
+import java.net.SocketTimeoutException
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
@@ -220,6 +230,13 @@ data class DiagResult(
     val detail: String = ""
 )
 
+data class ConnectionDiagnosis(
+    val title: String,
+    val summary: String,
+    val likelyCauses: List<String>,
+    val nextSteps: List<String>
+)
+
 @Composable
 fun NetworkDiagScreen(onBack: () -> Unit) {
     val context = LocalContext.current
@@ -239,7 +256,7 @@ fun NetworkDiagScreen(onBack: () -> Unit) {
             wifiInfo = wifi
 
             // 2. UDP Discovery test
-            val udpResult = withContext(Dispatchers.IO) { testUdpDiscovery() }
+            val udpResult = withContext(Dispatchers.IO) { testUdpDiscovery(context) }
             newResults.add(udpResult)
             results = newResults.toList()
 
@@ -257,7 +274,7 @@ fun NetworkDiagScreen(onBack: () -> Unit) {
                 results = newResults.toList()
 
                 // 5. WebSocket test
-                val wsResult = withContext(Dispatchers.IO) { testWebSocket(ip, port) }
+                val wsResult = withContext(Dispatchers.IO) { testWebSocket(context, ip, port) }
                 newResults.add(wsResult)
                 results = newResults.toList()
             } else {
@@ -366,6 +383,36 @@ fun NetworkDiagScreen(onBack: () -> Unit) {
                 }
             }
 
+            if (results.isNotEmpty()) {
+                val diagnosis = buildConnectionDiagnosis(context, wifiInfo, results)
+                DiagnosisCard(diagnosis)
+
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    OutlinedButton(
+                        onClick = { copyConnectionIssue(context, wifiInfo, results) },
+                        modifier = Modifier.weight(1f),
+                        shape = RoundedCornerShape(10.dp)
+                    ) {
+                        Icon(Icons.Default.ContentCopy, null, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("نسخ السبب", fontSize = 12.sp)
+                    }
+                    Button(
+                        onClick = { shareDiagnosticReport(context, wifiInfo, results) },
+                        modifier = Modifier.weight(1f),
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2E7D32)),
+                        shape = RoundedCornerShape(10.dp)
+                    ) {
+                        Icon(Icons.Default.Share, null, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("ملف التشخيص", fontSize = 12.sp)
+                    }
+                }
+            }
+
             // Test results
             results.forEach { result ->
                 DiagResultCard(result)
@@ -425,6 +472,50 @@ private fun DiagResultCard(result: DiagResult) {
     }
 }
 
+@Composable
+private fun DiagnosisCard(diagnosis: ConnectionDiagnosis) {
+    Surface(
+        Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(12.dp),
+        color = Color(0xFFFFFBEB),
+        shadowElevation = 1.dp
+    ) {
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Default.Warning, null, tint = Color(0xFFD97706), modifier = Modifier.size(22.dp))
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    diagnosis.title,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 14.sp,
+                    color = Color(0xFF92400E)
+                )
+            }
+
+            Text(
+                diagnosis.summary,
+                fontSize = 12.sp,
+                color = Color(0xFF78350F),
+                lineHeight = 17.sp
+            )
+
+            if (diagnosis.likelyCauses.isNotEmpty()) {
+                Text("الأسباب الأقرب:", fontWeight = FontWeight.Bold, fontSize = 12.sp, color = Color(0xFF92400E))
+                diagnosis.likelyCauses.take(3).forEach {
+                    Text("• $it", fontSize = 12.sp, color = Color(0xFF78350F), lineHeight = 17.sp)
+                }
+            }
+
+            if (diagnosis.nextSteps.isNotEmpty()) {
+                Text("ما يجب تجربته:", fontWeight = FontWeight.Bold, fontSize = 12.sp, color = Color(0xFF92400E))
+                diagnosis.nextSteps.take(3).forEach {
+                    Text("• $it", fontSize = 12.sp, color = Color(0xFF78350F), lineHeight = 17.sp)
+                }
+            }
+        }
+    }
+}
+
 // ======================== Diagnostic Tests ========================
 
 private fun getWifiInfo(context: Context): String {
@@ -452,7 +543,7 @@ private fun intToIp(ip: Int): String {
     return "${ip and 0xFF}.${ip shr 8 and 0xFF}.${ip shr 16 and 0xFF}.${ip shr 24 and 0xFF}"
 }
 
-private fun testUdpDiscovery(): DiagResult {
+private fun testUdpDiscovery(context: Context): DiagResult {
     return try {
         val start = System.currentTimeMillis()
         val socket = DatagramSocket(null).apply {
@@ -467,8 +558,12 @@ private fun testUdpDiscovery(): DiagResult {
             put("device", "diag_test")
         }
         val data = ping.toString().toByteArray(Charsets.UTF_8)
-        val packet = DatagramPacket(data, data.size, InetAddress.getByName("255.255.255.255"), 7788)
-        socket.send(packet)
+        val targets = linkedSetOf("255.255.255.255")
+        getSubnetBroadcast()?.let { targets.add(it) }
+        WameedPrefs.getPcIp(context).takeIf { it.isNotBlank() }?.let { targets.add(it) }
+        targets.forEach { target ->
+            socket.send(DatagramPacket(data, data.size, InetAddress.getByName(target), 7789))
+        }
 
         val buf = ByteArray(1024)
         val recv = DatagramPacket(buf, buf.size)
@@ -484,7 +579,26 @@ private fun testUdpDiscovery(): DiagResult {
             DiagResult("UDP Discovery", false, elapsed, "رد غير متوقع: $response")
         }
     } catch (e: Exception) {
-        DiagResult("UDP Discovery", false, detail = e.message ?: "فشل غير معروف")
+        val detail = when (e) {
+            is SocketTimeoutException -> "لم يصل رد UDP على المنفذ 7789. قد يكون broadcast محجوباً أو وميض على الكمبيوتر غير مفتوح."
+            else -> "${e.javaClass.simpleName}: ${e.message ?: "فشل غير معروف"}"
+        }
+        DiagResult("UDP Discovery", false, detail = detail)
+    }
+}
+
+private fun getSubnetBroadcast(): String? {
+    return try {
+        val interfaces = java.net.NetworkInterface.getNetworkInterfaces() ?: return null
+        for (iface in interfaces) {
+            if (iface.isLoopback || !iface.isUp) continue
+            for (addr in iface.interfaceAddresses) {
+                addr.broadcast?.hostAddress?.let { return it }
+            }
+        }
+        null
+    } catch (_: Exception) {
+        null
     }
 }
 
@@ -497,7 +611,12 @@ private fun testTcp(ip: String, port: Int): DiagResult {
         val elapsed = System.currentTimeMillis() - start
         DiagResult("TCP ($ip:$port)", true, elapsed)
     } catch (e: Exception) {
-        DiagResult("TCP ($ip:$port)", false, detail = e.message ?: "فشل غير معروف")
+        val detail = when (e) {
+            is ConnectException -> "رفض الاتصال: الجهاز موجود لكن منفذ وميض $port مغلق أو محجوب."
+            is SocketTimeoutException -> "انتهت المهلة: غالباً Firewall أو عزل بين الأجهزة أو وميض لا يستمع على المنفذ."
+            else -> "${e.javaClass.simpleName}: ${e.message ?: "فشل غير معروف"}"
+        }
+        DiagResult("TCP ($ip:$port)", false, detail = detail)
     }
 }
 
@@ -512,11 +631,11 @@ private fun testIcmpPing(ip: String): DiagResult {
             DiagResult("ICMP Ping ($ip)", false, elapsed, "الجهاز لم يستجب (قد يكون ICMP محجوباً)")
         }
     } catch (e: Exception) {
-        DiagResult("ICMP Ping ($ip)", false, detail = e.message ?: "فشل غير معروف")
+        DiagResult("ICMP Ping ($ip)", false, detail = "${e.javaClass.simpleName}: ${e.message ?: "فشل غير معروف"}")
     }
 }
 
-private fun testWebSocket(ip: String, port: Int): DiagResult {
+private fun testWebSocket(context: Context, ip: String, port: Int): DiagResult {
     return try {
         val start = System.currentTimeMillis()
         val latch = CountDownLatch(1)
@@ -532,8 +651,8 @@ private fun testWebSocket(ip: String, port: Int): DiagResult {
             override fun onOpen(webSocket: WebSocket, response: Response) {
                 val hello = JSONObject().apply {
                     put("type", "hello")
-                    put("device", "diag_test")
-                    put("device_id", "diag_probe")
+                    put("device", WameedPrefs.getDeviceName())
+                    put("device_id", WameedPrefs.getOrCreateDeviceId(context))
                     put("app_version", BuildConfig.VERSION_NAME)
                 }
                 webSocket.send(hello.toString())
@@ -549,7 +668,12 @@ private fun testWebSocket(ip: String, port: Int): DiagResult {
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                wsResult = DiagResult("WebSocket ($ip:$port)", false, detail = t.message ?: "فشل الاتصال")
+                val detail = when (t) {
+                    is ConnectException -> "فشل فتح WebSocket لأن منفذ TCP غير متاح."
+                    is SocketTimeoutException -> "انتهت مهلة WebSocket: الاتصال يصل للجهاز لكن الخدمة لا ترد."
+                    else -> "${t.javaClass.simpleName}: ${t.message ?: "فشل الاتصال"}"
+                }
+                wsResult = DiagResult("WebSocket ($ip:$port)", false, detail = detail)
                 latch.countDown()
             }
         })
@@ -561,22 +685,157 @@ private fun testWebSocket(ip: String, port: Int): DiagResult {
     }
 }
 
-private fun shareDiagResults(context: Context, wifiInfo: String, results: List<DiagResult>) {
-    val sb = StringBuilder()
-    sb.appendLine("=== Wameed Network Diagnostics ===")
-    sb.appendLine(WameedLogger.getDiagnosticSummary(context))
-    sb.appendLine("--- WiFi ---")
-    sb.appendLine(wifiInfo)
-    sb.appendLine("--- Tests ---")
-    results.forEach { r ->
-        val status = if (r.passed) "✅ PASS (${r.timeMs}ms)" else "❌ FAIL: ${r.detail}"
-        sb.appendLine("${r.name}: $status")
+private fun buildConnectionDiagnosis(
+    context: Context,
+    wifiInfo: String,
+    results: List<DiagResult>
+): ConnectionDiagnosis {
+    val ip = WameedPrefs.getPcIp(context)
+    val port = WameedPrefs.getPcPort(context)
+    val udp = results.firstOrNull { it.name.startsWith("UDP") }
+    val tcp = results.firstOrNull { it.name.startsWith("TCP") }
+    val ping = results.firstOrNull { it.name.startsWith("ICMP") }
+    val ws = results.firstOrNull { it.name.startsWith("WebSocket") }
+
+    if (ip.isBlank()) {
+        return ConnectionDiagnosis(
+            title = "لم يتم حفظ عنوان الكمبيوتر",
+            summary = "الهاتف لا يعرف أي IP للكمبيوتر، لذلك لا يمكن اختبار قناة الإرسال.",
+            likelyCauses = listOf("لم يتم اختيار جهاز من البحث بعد", "تم مسح إعدادات التطبيق أو تغيرت الشبكة"),
+            nextSteps = listOf("شغّل وميض على الكمبيوتر", "اضغط بحث من الهاتف ثم اختر الكمبيوتر", "أو أدخل IP الكمبيوتر يدوياً")
+        )
     }
 
-    val intent = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
-        type = "text/plain"
-        putExtra(android.content.Intent.EXTRA_TEXT, sb.toString())
-        putExtra(android.content.Intent.EXTRA_SUBJECT, "Wameed Network Diagnostics")
+    val wsStatus = ws?.detail.orEmpty()
+    val wsNeedsApproval = ws?.passed == true && wsStatus.contains("pairing_required", ignoreCase = true)
+
+    return when {
+        tcp?.passed == true && ws?.passed == true && !wsNeedsApproval -> ConnectionDiagnosis(
+            title = "الاتصال الأساسي سليم",
+            summary = "الهاتف وصل إلى $ip:$port وWebSocket رد بنجاح. إذا فشل الإرسال بعد ذلك فالمشكلة غالباً في الاقتران أو حفظ الملف أو صلاحيات الملف المرسل.",
+            likelyCauses = listOf("موافقة الاقتران لم تحفظ على الطرف الآخر", "الملف نفسه من تطبيق لا يسمح بالقراءة المستمرة", "انقطاع Wi-Fi أثناء نقل ملف كبير"),
+            nextSteps = listOf("جرّب إرسال نص صغير أولاً", "راقب سجل التشخيص أثناء الإرسال", "أعد الاقتران إذا تغير الجهاز أو أعدت تثبيت التطبيق")
+        )
+
+        wsNeedsApproval -> ConnectionDiagnosis(
+            title = "القناة تعمل وتنتظر موافقة الاقتران",
+            summary = "منفذ وميض مفتوح وWebSocket يعمل، لكن الكمبيوتر طلب موافقة الاقتران.",
+            likelyCauses = listOf("هذا الهاتف غير موثوق بعد على الكمبيوتر", "تم حذف أجهزة الثقة أو أُعيد تثبيت التطبيق", "نافذة الموافقة على الكمبيوتر لم تُقبل"),
+            nextSteps = listOf("افتح وميض على الكمبيوتر واضغط قبول", "بعد القبول أعد تشغيل الفحص", "إذا لا تظهر نافذة القبول امسح الثقة وأعد المحاولة")
+        )
+
+        ping?.passed == true && tcp?.passed != true -> ConnectionDiagnosis(
+            title = "الجهاز موجود لكن منفذ وميض غير متاح",
+            summary = "Ping إلى الكمبيوتر ناجح، لكن TCP/WebSocket على $ip:$port يفشل. هذا هو نفس تناقض الصور: ظهور الاسم لا يعني أن قناة الإرسال مفتوحة.",
+            likelyCauses = listOf("Windows Firewall يمنع TCP 7788", "وميض على الكمبيوتر غير مفتوح أو لم يبدأ السيرفر", "الشبكة Public/VPN/Guest تعزل الاتصالات الداخلية"),
+            nextSteps = listOf("افتح وميض على الكمبيوتر وتأكد أنه يعمل", "اسمح للمنفذ TCP 7788 وUDP 7789 في Firewall", "اجعل شبكة ويندوز Private وأوقف VPN مؤقتاً")
+        )
+
+        udp?.passed == true && tcp?.passed != true -> ConnectionDiagnosis(
+            title = "الاكتشاف يعمل لكن الاتصال محجوب",
+            summary = "الهاتف تلقى إعلان وميض عبر UDP، لكن الاتصال الفعلي على TCP لم ينجح.",
+            likelyCauses = listOf("قاعدة UDP موجودة لكن TCP 7788 محجوب", "البرنامج يعلن نفسه بينما سيرفر WebSocket متوقف", "راوتر أو نقطة وصول تمنع TCP بين الأجهزة"),
+            nextSteps = listOf("أعد تشغيل وميض على الكمبيوتر", "أضف قاعدة Firewall لمنفذ TCP 7788", "جرّب نفس الشبكة بدون Guest Wi-Fi أو Hotspot معزول")
+        )
+
+        tcp?.passed == true && ws?.passed != true -> ConnectionDiagnosis(
+            title = "المنفذ مفتوح لكن WebSocket لا يكتمل",
+            summary = "TCP يقبل الاتصال على $ip:$port، لكن بروتوكول وميض لا يحصل على رد WebSocket صحيح.",
+            likelyCauses = listOf("نسخة الكمبيوتر قديمة أو عالقة", "خدمة أخرى تستخدم المنفذ 7788", "سيرفر وميض بدأ ثم تعطل داخلياً"),
+            nextSteps = listOf("أغلق وميض من شريط المهام وافتحه من جديد", "تأكد أن Wameed.exe هو من يستمع على 7788", "ثبت نفس إصدار الحزمة على الهاتف والكمبيوتر")
+        )
+
+        udp?.passed != true && tcp?.passed == true -> ConnectionDiagnosis(
+            title = "الاتصال اليدوي يعمل لكن الاكتشاف التلقائي محجوب",
+            summary = "قناة الإرسال يمكن أن تعمل عبر IP محفوظ، لكن broadcast الخاص بالاكتشاف لا يصل.",
+            likelyCauses = listOf("الراوتر يمنع UDP broadcast", "الشبكة Guest أو Enterprise", "بعض VPN/Hotspot يحجب حزم الاكتشاف"),
+            nextSteps = listOf("استخدم الإدخال اليدوي للـ IP", "افتح UDP 7789 في Firewall", "غيّر الشبكة أو عطّل عزل الأجهزة في الراوتر")
+        )
+
+        else -> ConnectionDiagnosis(
+            title = "لا يوجد مسار واضح إلى الكمبيوتر",
+            summary = "الفحوصات لم تثبت وجود قناة مستقرة إلى $ip:$port.",
+            likelyCauses = listOf("الهاتف والكمبيوتر ليسا على نفس الشبكة الفعلية", "IP الكمبيوتر تغير وبقي القديم محفوظاً", "الكمبيوتر نائم أو وميض غير مشغل أو الشبكة تعزل الأجهزة"),
+            nextSteps = listOf("تأكد من نفس Wi-Fi وليس Guest", "أعد البحث من الهاتف لتحديث IP", "افتح وميض على الكمبيوتر وأعد الفحص")
+        )
     }
-    context.startActivity(android.content.Intent.createChooser(intent, "مشاركة نتائج التشخيص"))
+}
+
+private fun buildConnectionIssueText(
+    context: Context,
+    wifiInfo: String,
+    results: List<DiagResult>,
+    includeLogs: Boolean = false
+): String {
+    val diagnosis = buildConnectionDiagnosis(context, wifiInfo, results)
+    val time = SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.US).format(Date())
+    val sb = StringBuilder()
+    sb.appendLine("=== Wameed Connection Diagnosis ===")
+    sb.appendLine("Time: $time")
+    sb.appendLine("App: ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})")
+    sb.appendLine("Android: ${android.os.Build.VERSION.RELEASE} API ${android.os.Build.VERSION.SDK_INT}")
+    sb.appendLine("Device: ${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL}")
+    sb.appendLine("Phone receiver service: ${if (WameedConnectionService.isRunning) "running" else "stopped"}")
+    sb.appendLine("PC: ${WameedPrefs.getPcName(context).ifBlank { "unknown" }}")
+    sb.appendLine("PC address: ${WameedPrefs.getDisplayAddress(context).ifBlank { "not configured" }}")
+    sb.appendLine("Keep-alive: ${WameedPrefs.isKeepAliveEnabled(context)}")
+    sb.appendLine()
+    sb.appendLine("--- Diagnosis ---")
+    sb.appendLine(diagnosis.title)
+    sb.appendLine(diagnosis.summary)
+    sb.appendLine()
+    sb.appendLine("Likely causes:")
+    diagnosis.likelyCauses.forEach { sb.appendLine("- $it") }
+    sb.appendLine()
+    sb.appendLine("Next steps:")
+    diagnosis.nextSteps.forEach { sb.appendLine("- $it") }
+    sb.appendLine()
+    sb.appendLine("--- WiFi ---")
+    sb.appendLine(wifiInfo.ifBlank { "WiFi info unavailable" })
+    sb.appendLine()
+    sb.appendLine("--- Tests ---")
+    results.forEach { r ->
+        val status = if (r.passed) "PASS (${r.timeMs}ms)" else "FAIL"
+        sb.appendLine("${r.name}: $status${if (r.detail.isNotBlank()) " | ${r.detail}" else ""}")
+    }
+
+    if (includeLogs) {
+        sb.appendLine()
+        sb.appendLine("--- Recent App Log ---")
+        WameedLogger.getEntries().takeLast(160).forEach { entry ->
+            sb.appendLine(entry.formatForFile())
+        }
+    }
+
+    return sb.toString()
+}
+
+private fun copyConnectionIssue(context: Context, wifiInfo: String, results: List<DiagResult>) {
+    val text = buildConnectionIssueText(context, wifiInfo, results, includeLogs = false)
+    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+    clipboard.setPrimaryClip(ClipData.newPlainText("Wameed connection diagnosis", text))
+    Toast.makeText(context, "تم نسخ سبب مشكلة الاتصال", Toast.LENGTH_SHORT).show()
+}
+
+private fun shareDiagnosticReport(context: Context, wifiInfo: String, results: List<DiagResult>) {
+    try {
+        val report = buildConnectionIssueText(context, wifiInfo, results, includeLogs = true)
+        val file = File(context.filesDir, "wameed_diagnostic_report.txt")
+        file.writeText(report, Charsets.UTF_8)
+        val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+        val intent = Intent(Intent.ACTION_SEND).apply {
+            type = "text/plain"
+            putExtra(Intent.EXTRA_STREAM, uri)
+            putExtra(Intent.EXTRA_TEXT, report.take(4000))
+            putExtra(Intent.EXTRA_SUBJECT, "Wameed Diagnostic Report")
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        context.startActivity(Intent.createChooser(intent, "مشاركة ملف التشخيص"))
+    } catch (e: Exception) {
+        Toast.makeText(context, "تعذر إنشاء ملف التشخيص: ${e.message}", Toast.LENGTH_LONG).show()
+    }
+}
+
+private fun shareDiagResults(context: Context, wifiInfo: String, results: List<DiagResult>) {
+    shareDiagnosticReport(context, wifiInfo, results)
 }

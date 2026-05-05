@@ -1,14 +1,14 @@
 {
   "android": {
-    "versionCode": 12,
-    "versionName": "1.8.2",
-    "updateUrl": "https://github.com/officerhasikhc/wameed/releases/download/1.8.2/Wameed-Android.apk",
+    "versionCode": 13,
+    "versionName": "1.8.3",
+    "updateUrl": "https://github.com/officerhasikhc/wameed/releases/download/1.8.3/Wameed-Android.apk",
     "isForceUpdate": false,
     "releaseNotes": "تحسين نظام التحديث التلقائي وإصلاح مشكلة تعارض الحزمة."
   },
   "windows": {
-    "version": "1.8.2",
-    "updateUrl": "https://github.com/officerhasikhc/wameed/releases/download/1.8.2/WameedSetup-1.8.2.exe",
+    "version": "1.8.3",
+    "updateUrl": "https://github.com/officerhasikhc/wameed/releases/download/1.8.3/WameedSetup-1.8.3.exe",
     "releaseNotes": "تحسينات في واجهة المستخدم ودعم التحديثات التلقائية."
   }
 }

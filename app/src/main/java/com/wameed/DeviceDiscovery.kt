@@ -79,7 +79,9 @@ class DeviceDiscovery {
                         val json = JSONObject(data)
 
                         if (json.optString("service") == "wameed_pc") {
-                            val ip = json.optString("ip", packet.address?.hostAddress ?: "")
+                            val packetIp = packet.address?.hostAddress ?: ""
+                            val reportedIp = json.optString("ip", "")
+                            val ip = if (isUsableRemoteIp(reportedIp)) reportedIp else packetIp
                             val port = json.optInt("port", 7788)
                             val name = json.optString("name", context.getString(R.string.label_pc_generic))
                             val key = "$ip:$port"
@@ -178,6 +180,14 @@ class DeviceDiscovery {
             }
         } catch (_: Exception) {}
         return null
+    }
+
+    private fun isUsableRemoteIp(ip: String): Boolean {
+        if (ip.isBlank()) return false
+        if (ip == "0.0.0.0" || ip == "::" || ip == "::1") return false
+        if (ip.startsWith("127.")) return false
+        if (ip.equals("localhost", ignoreCase = true)) return false
+        return true
     }
 
     fun stop() {

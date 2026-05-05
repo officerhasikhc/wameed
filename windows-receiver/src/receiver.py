@@ -290,15 +290,40 @@ def get_resource_path(relative_path):
         return os.path.join(sys._MEIPASS, relative_path)
     return os.path.join(os.path.abspath("."), relative_path)
 
+def _is_usable_ipv4(ip: str) -> bool:
+    return bool(ip) and not ip.startswith("127.") and ip != "0.0.0.0"
+
 def get_local_ip():
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         s.connect(("8.8.8.8", 80))
         ip = s.getsockname()[0]
         s.close()
-        return ip
+        if _is_usable_ipv4(ip):
+            return ip
     except Exception:
-        return "127.0.0.1"
+        pass
+
+    try:
+        for ip in socket.gethostbyname_ex(socket.gethostname())[2]:
+            if _is_usable_ipv4(ip):
+                return ip
+    except Exception:
+        pass
+    return "127.0.0.1"
+
+def get_local_ip_for_peer(peer_ip: str = None) -> str:
+    if peer_ip:
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.connect((peer_ip, 9))
+            ip = s.getsockname()[0]
+            s.close()
+            if _is_usable_ipv4(ip):
+                return ip
+        except Exception:
+            pass
+    return get_local_ip()
 
 # ======================== State & Storage ========================
 CONFIG_FILE = os.path.join(APP_DATA_DIR, "config.json")
@@ -2540,11 +2565,11 @@ def udp_broadcast():
 
         logger.info(f"Subnet broadcast: {subnet_bc or 'يُستخدم 255.255.255.255 فقط'}")
 
-        def _response() -> bytes:
+        def _response(peer_ip=None) -> bytes:
             return json.dumps({
                 "service": "wameed_pc",
                 "name":    socket.gethostname(),
-                "ip":      get_local_ip(),
+                "ip":      get_local_ip_for_peer(peer_ip),
                 "port":    PORT_WS,
                 "version": VERSION,
             }, ensure_ascii=False).encode("utf-8")
@@ -2586,7 +2611,7 @@ def udp_broadcast():
                 req_type = req.get("type", "")
 
                 if svc == "wameed_phone" or req_type == "discovery_ping":
-                    sock.sendto(_response(), addr)
+                    sock.sendto(_response(sender_ip), addr)
                     logger.info(f"✅ رد Discovery → {sender_ip} ({req.get('device', '?')})")
                 else:
                     logger.debug(f"UDP: تجاهل حزمة من {sender_ip} | svc={svc}")

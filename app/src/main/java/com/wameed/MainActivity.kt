@@ -344,48 +344,52 @@ fun MainScreen(sender: WameedSender, discovery: DeviceDiscovery, updateManager: 
 
         discovery.startListening(context, callback = object : DeviceDiscovery.DiscoveryCallback {
             override fun onDeviceFound(device: DeviceDiscovery.DiscoveredDevice) {
-                devices[device.address] = device
-                if (device.name.isNotBlank() && device.name != device.ip) {
-                    WameedPrefs.setPcName(context, device.name)
-                }
-                
-                val savedName = WameedPrefs.getPcName(context)
-                val savedIp = WameedPrefs.getPcIp(context)
-                val savedPort = WameedPrefs.getPcPort(context)
-                
-                // فحص هل هذا هو الجهاز المفضل (نفس الاسم أو نفس الـ IP)
-                val isLastDevice = (savedIp == device.ip && savedPort == device.port) ||
-                        (device.name.isNotBlank() && device.name == savedName)
+                mainHandler.post {
+                    devices[device.address] = device
+                    if (device.name.isNotBlank() && device.name != device.ip) {
+                        WameedPrefs.setPcName(context, device.name)
+                    }
 
-                if (isLastDevice && connectionState != ConnectionState.Connected && connectionState != ConnectionState.Connecting) {
-                    Log.i("Wameed", "Auto-connecting to known device: ${device.name} at ${device.ip}")
-                    mainHandler.post {
+                    val savedName = WameedPrefs.getPcName(context)
+                    val savedIp = WameedPrefs.getPcIp(context)
+                    val savedPort = WameedPrefs.getPcPort(context)
+
+                    // فحص هل هذا هو الجهاز المفضل (نفس الاسم أو نفس الـ IP)
+                    val isLastDevice = (savedIp == device.ip && savedPort == device.port) ||
+                            (device.name.isNotBlank() && device.name == savedName)
+
+                    if (isLastDevice && connectionState != ConnectionState.Connected && connectionState != ConnectionState.Connecting) {
+                        Log.i("Wameed", "Auto-connecting to known device: ${device.name} at ${device.ip}")
                         connectToDevice(device)
                     }
-                }
 
-                val sameName = device.name.isNotBlank()
-                        && device.name != device.ip
-                        && device.name.equals(savedName, ignoreCase = true)
-                val ipChanged = savedIp.isNotEmpty()
-                        && (savedIp != device.ip || savedPort != device.port)
-                
-                if (sameName && ipChanged) {
-                    Log.i("Wameed",
-                        "PC IP changed: $savedIp:$savedPort \u2192 ${device.ip}:${device.port} (name=${device.name})")
-                    WameedPrefs.savePcAddress(context, "${device.ip}:${device.port}")
-                    WameedConnectionService.start(context)
+                    val sameName = device.name.isNotBlank()
+                            && device.name != device.ip
+                            && device.name.equals(savedName, ignoreCase = true)
+                    val ipChanged = savedIp.isNotEmpty()
+                            && (savedIp != device.ip || savedPort != device.port)
+
+                    if (sameName && ipChanged) {
+                        Log.i("Wameed",
+                            "PC IP changed: $savedIp:$savedPort \u2192 ${device.ip}:${device.port} (name=${device.name})")
+                        WameedPrefs.savePcAddress(context, "${device.ip}:${device.port}")
+                        WameedConnectionService.start(context)
+                    }
                 }
             }
             override fun onError(error: String) {
-                connectionState = ConnectionState.Failed
-                statusText = error
+                mainHandler.post {
+                    connectionState = ConnectionState.Failed
+                    statusText = error
+                }
             }
             override fun onSearchFinished() {
-                if (connectionState == ConnectionState.Searching) {
-                    connectionState = ConnectionState.Idle
-                    statusText = if (devices.isEmpty()) context.getString(R.string.no_devices_found)
-                                 else context.getString(R.string.choose_device)
+                mainHandler.post {
+                    if (connectionState == ConnectionState.Searching) {
+                        connectionState = ConnectionState.Idle
+                        statusText = if (devices.isEmpty()) context.getString(R.string.no_devices_found)
+                                     else context.getString(R.string.choose_device)
+                    }
                 }
             }
         })
