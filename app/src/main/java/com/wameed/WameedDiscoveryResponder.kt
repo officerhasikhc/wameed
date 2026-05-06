@@ -39,7 +39,8 @@ class WameedDiscoveryResponder(private val context: Context) {
                         val data = String(packet.data, 0, packet.length, Charsets.UTF_8)
                         val json = JSONObject(data)
                         
-                        if (json.optString("type") == "discovery_ping") {
+                        if (json.optString("type") == "discovery_ping" &&
+                            json.optString("service") == "wameed_pc") {
                             Log.d(TAG, "Received discovery ping from ${packet.address}")
                             sendResponse(packet.address, packet.port)
                         }

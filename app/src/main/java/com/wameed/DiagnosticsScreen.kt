@@ -544,13 +544,14 @@ private fun intToIp(ip: Int): String {
 }
 
 private fun testUdpDiscovery(context: Context): DiagResult {
+    var socket: DatagramSocket? = null
     return try {
         val start = System.currentTimeMillis()
-        val socket = DatagramSocket(null).apply {
+        socket = DatagramSocket(null).apply {
             reuseAddress = true
             bind(InetSocketAddress(0))
             broadcast = true
-            soTimeout = 4000
+            soTimeout = 1000
         }
         val ping = JSONObject().apply {
             put("type", "discovery_ping")
@@ -562,28 +563,50 @@ private fun testUdpDiscovery(context: Context): DiagResult {
         getSubnetBroadcast()?.let { targets.add(it) }
         WameedPrefs.getPcIp(context).takeIf { it.isNotBlank() }?.let { targets.add(it) }
         targets.forEach { target ->
-            socket.send(DatagramPacket(data, data.size, InetAddress.getByName(target), 7789))
+            socket?.send(DatagramPacket(data, data.size, InetAddress.getByName(target), 7789))
         }
 
         val buf = ByteArray(1024)
-        val recv = DatagramPacket(buf, buf.size)
-        socket.receive(recv)
-        val elapsed = System.currentTimeMillis() - start
-        socket.close()
+        val deadline = start + 4000L
+        val ignored = mutableListOf<String>()
 
-        val response = String(recv.data, 0, recv.length, Charsets.UTF_8)
-        val json = JSONObject(response)
-        if (json.optString("service") == "wameed_pc") {
-            DiagResult("UDP Discovery", true, elapsed, "PC: ${json.optString("name")} (${recv.address.hostAddress})")
-        } else {
-            DiagResult("UDP Discovery", false, elapsed, "رد غير متوقع: $response")
+        while (System.currentTimeMillis() < deadline) {
+            try {
+                val remaining = (deadline - System.currentTimeMillis()).coerceAtLeast(200L)
+                socket?.soTimeout = remaining.coerceAtMost(1000L).toInt()
+                val recv = DatagramPacket(buf, buf.size)
+                socket?.receive(recv)
+
+                val elapsed = System.currentTimeMillis() - start
+                val response = String(recv.data, 0, recv.length, Charsets.UTF_8)
+                val json = JSONObject(response)
+                val service = json.optString("service")
+                if (service == "wameed_pc") {
+                    return DiagResult("UDP Discovery", true, elapsed, "PC: ${json.optString("name")} (${recv.address.hostAddress})")
+                } else {
+                    val source = recv.address?.hostAddress ?: "unknown"
+                    ignored.add("${service.ifBlank { "unknown" }} from $source")
+                    continue
+                }
+            } catch (_: SocketTimeoutException) {
+                continue
+            }
         }
+
+        val detail = if (ignored.isNotEmpty()) {
+            "لم يصل رد الكمبيوتر عبر UDP 7789. تم تجاهل ردود غير مطابقة: ${ignored.distinct().take(3).joinToString(", ")}"
+        } else {
+            "لم يصل رد UDP على المنفذ 7789. قد يكون broadcast محجوباً أو وميض على الكمبيوتر غير مفتوح."
+        }
+        DiagResult("UDP Discovery", false, detail = detail)
     } catch (e: Exception) {
         val detail = when (e) {
             is SocketTimeoutException -> "لم يصل رد UDP على المنفذ 7789. قد يكون broadcast محجوباً أو وميض على الكمبيوتر غير مفتوح."
             else -> "${e.javaClass.simpleName}: ${e.message ?: "فشل غير معروف"}"
         }
         DiagResult("UDP Discovery", false, detail = detail)
+    } finally {
+        try { socket?.close() } catch (_: Exception) {}
     }
 }
 
@@ -711,10 +734,18 @@ private fun buildConnectionDiagnosis(
 
     return when {
         tcp?.passed == true && ws?.passed == true && !wsNeedsApproval -> ConnectionDiagnosis(
-            title = "الاتصال الأساسي سليم",
-            summary = "الهاتف وصل إلى $ip:$port وWebSocket رد بنجاح. إذا فشل الإرسال بعد ذلك فالمشكلة غالباً في الاقتران أو حفظ الملف أو صلاحيات الملف المرسل.",
-            likelyCauses = listOf("موافقة الاقتران لم تحفظ على الطرف الآخر", "الملف نفسه من تطبيق لا يسمح بالقراءة المستمرة", "انقطاع Wi-Fi أثناء نقل ملف كبير"),
-            nextSteps = listOf("جرّب إرسال نص صغير أولاً", "راقب سجل التشخيص أثناء الإرسال", "أعد الاقتران إذا تغير الجهاز أو أعدت تثبيت التطبيق")
+            title = "الاتصال جاهز والإرسال يعمل",
+            summary = "الهاتف وصل إلى $ip:$port وWebSocket رد بنجاح. فشل UDP أو ICMP في هذه الحالة ملاحظة غير حرجة ولا يمنع الإرسال.",
+            likelyCauses = listOf(
+                "لا توجد مشكلة في قناة الإرسال الأساسية",
+                "قد يكون UDP broadcast محجوباً، وهذا يؤثر على الاكتشاف التلقائي فقط",
+                "قد يكون ICMP Ping محجوباً من ويندوز أو الراوتر رغم أن TCP يعمل"
+            ),
+            nextSteps = listOf(
+                "إذا الإرسال نجح فلا تحتاج إجراء إضافي",
+                "إذا لم يظهر الجهاز تلقائياً لاحقاً استخدم IP يدوي أو افتح UDP 7789",
+                "احتفظ بهذا التقرير فقط عند ظهور فشل إرسال فعلي"
+            )
         )
 
         wsNeedsApproval -> ConnectionDiagnosis(
