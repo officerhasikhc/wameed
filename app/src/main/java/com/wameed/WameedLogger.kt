@@ -90,6 +90,16 @@ object WameedLogger {
             Level.NET -> Log.d(tag, "[NET] $msg")
         }
 
+        // Remote breadcrumbs for developer diagnostics. Best effort only:
+        // local logging must keep working even if Firebase is unavailable.
+        try {
+            if (WameedCrashReporter.isInitialized()) {
+                WameedCrashReporter.getInstance().recordLogEntry(level.name, tag, msg)
+            }
+        } catch (ex: Exception) {
+            Log.w(TAG, "Failed to forward log to Crashlytics: ${ex.message}")
+        }
+
         // Notify listeners
         listeners.forEach { it.invoke() }
     }

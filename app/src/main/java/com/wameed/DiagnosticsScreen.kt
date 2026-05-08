@@ -3,6 +3,7 @@ package com.wameed
 import android.content.ClipData
 import android.content.Context
 import android.content.Intent
+import android.os.Bundle
 import android.net.wifi.WifiManager
 import android.util.Log
 import android.widget.Toast
@@ -291,6 +292,7 @@ fun NetworkDiagScreen(onBack: () -> Unit) {
                 val status = if (r.passed) "PASS (${r.timeMs}ms)" else "FAIL: ${r.detail}"
                 WameedLogger.net("Diagnostics", "${r.name}: $status")
             }
+            reportDiagnosticsToFirebase(context, wifi, newResults)
 
             isRunning = false
         }
@@ -839,6 +841,57 @@ private fun buildConnectionIssueText(
     }
 
     return sb.toString()
+}
+
+private fun reportDiagnosticsToFirebase(
+    context: Context,
+    wifiInfo: String,
+    results: List<DiagResult>
+) {
+    try {
+        val reporter = WameedCrashReporter.getInstance()
+        val diagnosis = buildConnectionDiagnosis(context, wifiInfo, results)
+        val failed = results.filter { !it.passed }
+        val passedCount = results.count { it.passed }
+        val failedNames = failed.joinToString(",") { it.name.substringBefore(" ") }.take(80)
+
+        reporter.refreshContext(context)
+        reporter.setCustomKey("diag_title", diagnosis.title.take(80))
+        reporter.setCustomKey("diag_passed_count", passedCount.toString())
+        reporter.setCustomKey("diag_failed_count", failed.size.toString())
+        reporter.setCustomKey("diag_failed_tests", failedNames)
+
+        results.forEach { result ->
+            val keyPrefix = "diag_" + result.name
+                .substringBefore(" ")
+                .lowercase(Locale.US)
+                .replace(Regex("[^a-z0-9_]"), "_")
+                .take(24)
+            reporter.setCustomKey("${keyPrefix}_passed", result.passed.toString())
+            reporter.setCustomKey("${keyPrefix}_ms", result.timeMs.toString())
+        }
+
+        reporter.logEvent("network_diagnostics", Bundle().apply {
+            putInt("passed_count", passedCount)
+            putInt("failed_count", failed.size)
+            putString("failed_tests", failedNames)
+        })
+
+        if (failed.isNotEmpty()) {
+            val summary = buildString {
+                append(diagnosis.title)
+                append(" | ")
+                append(failed.joinToString("; ") { "${it.name}: ${it.detail}".take(160) })
+            }
+            reporter.recordNonFatal(
+                category = "network_diagnostics_failed",
+                message = summary,
+                throttleMs = 120_000L
+            )
+        }
+    } catch (e: Exception) {
+        Log.w("Diagnostics", "Failed to report diagnostics to Firebase: ${e.message}")
+    }
 }
 
 private fun copyConnectionIssue(context: Context, wifiInfo: String, results: List<DiagResult>) {

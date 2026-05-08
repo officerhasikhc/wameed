@@ -33,6 +33,8 @@ class WameedBugReportActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        WameedCrashReporter.initialize(this)
+        WameedLogger.init(this)
         setContent {
             BugReportScreen()
         }
