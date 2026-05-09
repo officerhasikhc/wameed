@@ -44,6 +44,13 @@
     <string name="connected_last_send_short">متصل (آخر إرسال قبل %d ث)</string>
     <string name="pc_unavailable">الكمبيوتر غير متاح — ابحث مجدداً</string>
     <string name="connection_lost">انقطع الاتصال — الكمبيوتر لم يعد متاحاً</string>
+    <string name="receive_path_title">استقبال من الكمبيوتر إلى الهاتف</string>
+    <string name="receive_ready_from_pc">جاهز للاستقبال من الكمبيوتر</string>
+    <string name="receive_not_ready_from_pc">الاستقبال من الكمبيوتر غير جاهز</string>
+    <string name="send_path_title">إرسال من الهاتف إلى الكمبيوتر</string>
+    <string name="send_ready_to_pc">متصل للإرسال إلى الكمبيوتر</string>
+    <string name="send_not_ready_to_pc">غير جاهز للإرسال إلى الكمبيوتر</string>
+    <string name="discovery_only_no_ws">تم اكتشاف الكمبيوتر فقط — منفذ الإرسال محجوب</string>
     <string name="manual_ip_title">إدخال عنوان الكمبيوتر</string>
     <string name="manual_ip_label">IP:Port</string>
     <string name="manual_ip_placeholder">192.168.1.100:7788</string>

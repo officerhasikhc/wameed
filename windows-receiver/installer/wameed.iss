@@ -5,7 +5,7 @@
 
 #define AppName        "Wameed"
 #define AppNameAr      "وميض"
-#define AppVersion     "1.8.5"
+#define AppVersion     "1.8.6"
 #define AppPublisher   "Wameed Project"
 #define AppExe         "Wameed.exe"
 #define AppURL         "https://github.com/"
@@ -28,6 +28,8 @@ SolidCompression=yes
 WizardStyle=modern
 PrivilegesRequired=admin
 ArchitecturesInstallIn64BitMode=x64
+CloseApplications=yes
+RestartApplications=no
 ; Bilingual-friendly wizard
 ShowLanguageDialog=auto
 

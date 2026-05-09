@@ -143,8 +143,8 @@ class MainActivity : ComponentActivity() {
         // تهيئة سجل التشخيص
         WameedLogger.init(this)
         
-        // تشغيل خدمة الخلفية فوراً لضمان جاهزية الاستقبال
-        WameedConnectionService.start(this)
+        // تشغيل استقبال الهاتف حتى لو لم يكن مسار الهاتف -> الكمبيوتر جاهزاً بعد.
+        WameedConnectionService.startReceiving(this)
 
         setContent {
             WameedTheme {
@@ -180,6 +180,7 @@ fun MainScreen(sender: WameedSender, discovery: DeviceDiscovery, updateManager: 
     var selectedTab by remember { mutableIntStateOf(0) }
     var connectionState by remember { mutableStateOf(ConnectionState.Idle) }
     var statusText by remember { mutableStateOf("") }
+    var receivingReady by remember { mutableStateOf(WameedConnectionService.isReceiverReady) }
     val devices = remember { mutableStateMapOf<String, DeviceDiscovery.DiscoveredDevice>() }
     var selectedDevice by remember { mutableStateOf<DeviceDiscovery.DiscoveredDevice?>(null) }
     val showManualDialog = remember { mutableStateOf(false) }
@@ -216,6 +217,10 @@ fun MainScreen(sender: WameedSender, discovery: DeviceDiscovery, updateManager: 
     }
 
     fun sendSelectedFiles() {
+        if (connectionState != ConnectionState.Connected) {
+            Toast.makeText(context, context.getString(R.string.send_not_ready_to_pc), Toast.LENGTH_LONG).show()
+            return
+        }
         if (selectedUris.isEmpty()) {
             Log.w("MainActivity", "محاولة إرسال فاشلة: لم يتم اختيار ملفات")
             return
@@ -296,7 +301,7 @@ fun MainScreen(sender: WameedSender, discovery: DeviceDiscovery, updateManager: 
                     Log.i("MainActivity", "✅ تم الربط بنجاح مع ${device.name}")
                     mainHandler.post {
                         connectionState = ConnectionState.Connected
-                        statusText = context.getString(R.string.connected_to, device.name)
+                        statusText = context.getString(R.string.send_ready_to_pc)
                         WameedPrefs.setLastConnected(context)
                     }
                 }
@@ -316,7 +321,7 @@ fun MainScreen(sender: WameedSender, discovery: DeviceDiscovery, updateManager: 
                         Log.e("MainActivity", "❌ فشل الربط نهائياً مع ${device.name}: $error")
                         mainHandler.post {
                             connectionState = ConnectionState.Failed
-                            statusText = context.getString(R.string.connection_failed_to, device.name)
+                            statusText = context.getString(R.string.send_not_ready_to_pc)
                         }
                     }
                 }
@@ -424,7 +429,7 @@ fun MainScreen(sender: WameedSender, discovery: DeviceDiscovery, updateManager: 
                 statusText = if (recentSend != null) {
                     val ago = (System.currentTimeMillis() - recentSend.first) / 1000
                     context.getString(R.string.connected_last_send, ago)
-                } else context.getString(R.string.connected_ready)
+                } else context.getString(R.string.send_ready_to_pc)
             }
             recentSend != null -> {
                 connectionState = ConnectionState.Connected
@@ -444,7 +449,7 @@ fun MainScreen(sender: WameedSender, discovery: DeviceDiscovery, updateManager: 
                 if (wasConnected) {
                     // Give a brief grace — mark as Discovered, not Failed
                     connectionState = ConnectionState.Discovered
-                    statusText = context.getString(R.string.pc_unavailable)
+                    statusText = context.getString(R.string.discovery_only_no_ws)
                     // Retry TCP once after a short delay before declaring failure
                     delay(2000)
                     val retryOk = withContextIO { DeviceDiscovery.isTcpReachable(ip, port, 1500) }
@@ -455,16 +460,16 @@ fun MainScreen(sender: WameedSender, discovery: DeviceDiscovery, updateManager: 
                             name = friendly.ifBlank { WameedPrefs.getDisplayAddress(context) },
                             ip = ip, port = port
                         )
-                        statusText = context.getString(R.string.connected_ready)
+                        statusText = context.getString(R.string.send_ready_to_pc)
                     } else {
                         connectionState = ConnectionState.Failed
-                        statusText = context.getString(R.string.pc_unavailable)
+                        statusText = context.getString(R.string.send_not_ready_to_pc)
                         selectedDevice = null
                         if (triggerDiscoveryOnFailure) startDiscovery()
                     }
                 } else {
                     connectionState = ConnectionState.Failed
-                    statusText = context.getString(R.string.pc_unavailable)
+                    statusText = context.getString(R.string.send_not_ready_to_pc)
                     selectedDevice = null
                     if (triggerDiscoveryOnFailure) startDiscovery()
                 }
@@ -478,25 +483,30 @@ fun MainScreen(sender: WameedSender, discovery: DeviceDiscovery, updateManager: 
 
     LaunchedEffect(Unit) {
         WameedEvents.events.collect { event ->
-            if (event is WameedEvent.ServiceStatus) {
-                if (event.isWsConnected) {
-                    connectionState = ConnectionState.Connected
-                    statusText = context.getString(R.string.connected_to, event.pcName)
-                } else {
-                    // Only downgrade if we were connected AND no recent send.
-                    // This prevents flicker when the keep-alive WS drops temporarily.
-                    if (connectionState == ConnectionState.Connected) {
-                        val recentSendGrace = WameedPrefs.getLastSendInfo(context)
-                            ?.takeIf { (System.currentTimeMillis() - it.first) < 120_000 }
-                        if (recentSendGrace != null) {
-                            // Recent send exists — stay connected, don't flicker
-                            Log.d("MainActivity", "ServiceStatus(false) ignored — recent send within grace")
-                        } else {
-                            connectionState = ConnectionState.Discovered
-                            statusText = context.getString(R.string.connection_lost)
+            when (event) {
+                is WameedEvent.ServiceStatus -> {
+                    if (event.isWsConnected) {
+                        connectionState = ConnectionState.Connected
+                        statusText = context.getString(R.string.send_ready_to_pc)
+                    } else {
+                        // Only downgrade if we were connected AND no recent send.
+                        // This prevents flicker when the keep-alive WS drops temporarily.
+                        if (connectionState == ConnectionState.Connected) {
+                            val recentSendGrace = WameedPrefs.getLastSendInfo(context)
+                                ?.takeIf { (System.currentTimeMillis() - it.first) < 120_000 }
+                            if (recentSendGrace != null) {
+                                Log.d("MainActivity", "ServiceStatus(false) ignored — recent send within grace")
+                            } else {
+                                connectionState = ConnectionState.Discovered
+                                statusText = context.getString(R.string.discovery_only_no_ws)
+                            }
                         }
                     }
                 }
+                is WameedEvent.ReceiverStatus -> {
+                    receivingReady = event.isReady
+                }
+                else -> Unit
             }
         }
     }
@@ -522,7 +532,7 @@ fun MainScreen(sender: WameedSender, discovery: DeviceDiscovery, updateManager: 
                 failures = 0
                 if (connectionState == ConnectionState.Discovered) {
                     connectionState = ConnectionState.Connected
-                    statusText = context.getString(R.string.connected_ready)
+                    statusText = context.getString(R.string.send_ready_to_pc)
                 }
                 WameedPrefs.setLastConnected(context)
             } else {
@@ -534,10 +544,10 @@ fun MainScreen(sender: WameedSender, discovery: DeviceDiscovery, updateManager: 
                     failures = 0 // Reset — recent send keeps us alive
                 } else if (failures == 2) {
                     connectionState = ConnectionState.Discovered
-                    statusText = context.getString(R.string.connection_lost)
+                    statusText = context.getString(R.string.discovery_only_no_ws)
                 } else if (failures >= 4) {
                     connectionState = ConnectionState.Failed
-                    statusText = context.getString(R.string.connection_lost)
+                    statusText = context.getString(R.string.send_not_ready_to_pc)
                     break
                 }
             }
@@ -584,6 +594,7 @@ fun MainScreen(sender: WameedSender, discovery: DeviceDiscovery, updateManager: 
         when (selectedTab) {
             0 -> ConnectionTab(
                 modifier = Modifier.padding(padding),
+                receivingReady = receivingReady,
                 connectionState = connectionState,
                 statusText = statusText,
                 selectedDevice = selectedDevice,
@@ -665,6 +676,7 @@ fun MainScreen(sender: WameedSender, discovery: DeviceDiscovery, updateManager: 
 @Composable
 fun ConnectionTab(
     modifier: Modifier,
+    receivingReady: Boolean,
     connectionState: ConnectionState,
     statusText: String,
     selectedDevice: DeviceDiscovery.DiscoveredDevice?,
@@ -688,6 +700,8 @@ fun ConnectionTab(
             .verticalScroll(scrollState)
             .padding(horizontal = 20.dp, vertical = 16.dp)
     ) {
+        ReceiveStatusCard(receivingReady)
+        Spacer(modifier = Modifier.height(10.dp))
         StatusCard(connectionState, statusText, selectedDevice)
         Spacer(modifier = Modifier.height(20.dp))
 
@@ -755,7 +769,7 @@ fun ConnectionTab(
 
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             QuickAction(Modifier.weight(1f), stringResource(R.string.quick_action_send), Icons.Default.Add,
-                Color(0xFF43A047), !isSendingBatch) { onSend() }
+                Color(0xFF43A047), connectionState == ConnectionState.Connected && !isSendingBatch) { onSend() }
             QuickAction(Modifier.weight(1f), stringResource(R.string.quick_action_refresh), Icons.Default.Refresh,
                 Color(0xFF3B82F6), connectionState != ConnectionState.Searching && !isSendingBatch) { onRefresh() }
         }
@@ -1581,6 +1595,55 @@ fun TrustedDevicesTab(modifier: Modifier, onBack: () -> Unit) {
 }
 
 @Composable
+fun ReceiveStatusCard(isReady: Boolean) {
+    val dotColor = if (isReady) Color(0xFF22C55E) else Color(0xFF9CA3AF)
+    val bgColor = if (isReady) Color(0xFFF0FFF4) else Color.White
+    val status = if (isReady) R.string.receive_ready_from_pc else R.string.receive_not_ready_from_pc
+
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(20.dp),
+        color = bgColor,
+        shadowElevation = 1.dp
+    ) {
+        Row(
+            modifier = Modifier.padding(20.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(12.dp)
+                    .clip(CircleShape)
+                    .background(dotColor)
+            )
+            Spacer(modifier = Modifier.width(14.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    stringResource(R.string.receive_path_title),
+                    fontWeight = FontWeight.Medium,
+                    fontSize = 12.sp,
+                    color = Color(0xFF64748B)
+                )
+                Text(
+                    stringResource(status),
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 16.sp,
+                    color = if (isReady) Color(0xFF166534) else Color(0xFF475569)
+                )
+            }
+            if (isReady) {
+                Icon(
+                    Icons.Default.CheckCircle,
+                    contentDescription = null,
+                    tint = Color(0xFF22C55E),
+                    modifier = Modifier.size(18.dp)
+                )
+            }
+        }
+    }
+}
+
+@Composable
 fun StatusCard(
     state: ConnectionState,
     statusText: String,
@@ -1609,6 +1672,11 @@ fun StatusCard(
         ConnectionState.Searching -> Color(0xFFEFF6FF)
         ConnectionState.Idle -> Color.White
     }
+    val sendStatusText = if (statusText.isBlank()) {
+        stringResource(R.string.send_not_ready_to_pc)
+    } else {
+        statusText
+    }
 
     Surface(
         modifier = Modifier.fillMaxWidth(),
@@ -1628,7 +1696,17 @@ fun StatusCard(
             )
             Spacer(modifier = Modifier.width(14.dp))
             Column(modifier = Modifier.weight(1f)) {
-                Text(statusText, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                Text(
+                    stringResource(R.string.send_path_title),
+                    fontWeight = FontWeight.Medium,
+                    fontSize = 12.sp,
+                    color = Color(0xFF64748B)
+                )
+                Text(
+                    sendStatusText,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 16.sp
+                )
                 if (device != null && state == ConnectionState.Connected) {
                     val hasFriendlyName = device.name.isNotBlank()
                             && device.name != device.ip

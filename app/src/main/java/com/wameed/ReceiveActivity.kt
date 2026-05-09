@@ -114,6 +114,9 @@ class ReceiveActivity : AppCompatActivity() {
                     is WameedEvent.ServiceStatus -> {
                         // Not used in this activity
                     }
+                    is WameedEvent.ReceiverStatus -> {
+                        // Not used in this activity
+                    }
                 }
             }
         }

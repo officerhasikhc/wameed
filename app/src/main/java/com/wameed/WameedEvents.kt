@@ -27,4 +27,5 @@ sealed class WameedEvent {
     data class ReceiveText(val text: String, val from: String) : WameedEvent()
     data class ReceiveUrl(val url: String, val from: String) : WameedEvent()
     data class ServiceStatus(val isWsConnected: Boolean, val pcName: String) : WameedEvent()
+    data class ReceiverStatus(val isReady: Boolean) : WameedEvent()
 }

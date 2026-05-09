@@ -44,6 +44,13 @@
     <string name="connected_last_send_short">Connected (last sent %d sec ago)</string>
     <string name="pc_unavailable">PC unavailable — search again</string>
     <string name="connection_lost">Connection lost — PC no longer available</string>
+    <string name="receive_path_title">Receive from PC to phone</string>
+    <string name="receive_ready_from_pc">Ready to receive from PC</string>
+    <string name="receive_not_ready_from_pc">Receiving from PC is not ready</string>
+    <string name="send_path_title">Send from phone to PC</string>
+    <string name="send_ready_to_pc">Ready to send to PC</string>
+    <string name="send_not_ready_to_pc">Not ready to send to PC</string>
+    <string name="discovery_only_no_ws">PC discovered only — send port is blocked</string>
     <string name="manual_ip_title">Enter PC address</string>
     <string name="manual_ip_label">IP:Port</string>
     <string name="manual_ip_placeholder">192.168.1.100:7788</string>

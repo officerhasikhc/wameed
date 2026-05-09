@@ -95,6 +95,10 @@ class WameedConnectionService : Service() {
         @Volatile var isRunning: Boolean = false
             private set
 
+        /** True while the phone-side receiver server is accepting PC connections on 7789. */
+        @Volatile var isReceiverReady: Boolean = false
+            private set
+
         /** Safe entry point — caller doesn't need to know service internals. */
         fun start(context: Context) {
             if (!WameedPrefs.isKeepAliveEnabled(context)) return
@@ -252,7 +256,11 @@ class WameedConnectionService : Service() {
     private fun bootstrap() {
         pcDisplay = WameedPrefs.getPcIp(this).ifEmpty { getString(R.string.label_pc_generic) }
         ensureForeground()
-        openWs()
+        if (WameedPrefs.isConfigured(this)) {
+            openWs()
+        } else {
+            WameedEvents.tryEmit(WameedEvent.ServiceStatus(false, pcDisplay))
+        }
         schedulePing()
         scheduleIdleWatch()
         bootstrapped = true
@@ -380,8 +388,8 @@ class WameedConnectionService : Service() {
     private fun openWs() {
         val url = WameedPrefs.getWsUrl(this)
         if (url.contains("://:")) {
-            Log.w(TAG, "No PC configured — stopping")
-            stopSelfCleanly("not-configured")
+            Log.w(TAG, "No PC configured — keep receiver only")
+            WameedEvents.tryEmit(WameedEvent.ServiceStatus(false, pcDisplay))
             return
         }
         val request = Request.Builder().url(url).build()
@@ -400,14 +408,23 @@ class WameedConnectionService : Service() {
                 }
                 webSocket.send(hello.toString())
                 pingFailures = 0
-                WameedEvents.tryEmit(WameedEvent.ServiceStatus(true, pcDisplay))
-                // ⚡ فتح اتصال دائم للإرسال الفوري
-                WameedSender.openPersistent(this@WameedConnectionService)
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {
-                // Any reply counts as healthy.
                 pingFailures = 0
+                val resp = try { JSONObject(text) } catch (_: Exception) { JSONObject() }
+                val status = resp.optString("status", "")
+                val type = resp.optString("type", "")
+                when {
+                    status == "paired" || status == "hello" || status == "pong" || type == "pong" -> {
+                        WameedEvents.tryEmit(WameedEvent.ServiceStatus(true, pcDisplay))
+                        // ⚡ فتح اتصال دائم للإرسال الفوري بعد تأكيد المسار، لا بمجرد فتح socket.
+                        WameedSender.openPersistent(this@WameedConnectionService)
+                    }
+                    status == "pairing_required" || status == "rejected" -> {
+                        WameedEvents.tryEmit(WameedEvent.ServiceStatus(false, pcDisplay))
+                    }
+                }
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
@@ -451,7 +468,10 @@ class WameedConnectionService : Service() {
         handler.postDelayed({
             try {
                 val w = ws
-                if (w != null) {
+                if (!WameedPrefs.isConfigured(this)) {
+                    schedulePing()
+                    return@postDelayed
+                } else if (w != null) {
                     val ok = w.send(JSONObject().put("type", "ping").toString())
                     if (!ok) {
                         pingFailures++
@@ -550,8 +570,14 @@ class WameedConnectionService : Service() {
     private fun startReceivingMode() {
         cancelPendingReceiveShutdown()
         lastReceiveActivity = System.currentTimeMillis()
-        if (isReceiving) return
+        if (isReceiving) {
+            isReceiverReady = true
+            WameedEvents.tryEmit(WameedEvent.ReceiverStatus(true))
+            return
+        }
         isReceiving = true
+        isReceiverReady = true
+        WameedEvents.tryEmit(WameedEvent.ReceiverStatus(true))
         
         if (receiverServer == null) {
             receiverServer = WameedServer(this)
@@ -594,6 +620,9 @@ class WameedConnectionService : Service() {
 
                 override fun onError(error: String) {
                     Log.e(TAG, "Server Error: $error")
+                    isReceiving = false
+                    isReceiverReady = false
+                    WameedEvents.tryEmit(WameedEvent.ReceiverStatus(false))
                     WameedEvents.tryEmit(WameedEvent.ReceiveError(error))
                 }
 
@@ -659,6 +688,8 @@ class WameedConnectionService : Service() {
     private fun stopReceivingMode() {
         if (!isReceiving) return
         isReceiving = false
+        isReceiverReady = false
+        WameedEvents.tryEmit(WameedEvent.ReceiverStatus(false))
         receiverServer?.stop()
         nsdHelper?.unregisterService()
         discoveryResponder?.stop()

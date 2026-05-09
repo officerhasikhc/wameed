@@ -757,18 +757,18 @@ private fun buildConnectionDiagnosis(
             nextSteps = listOf("افتح وميض على الكمبيوتر واضغط قبول", "بعد القبول أعد تشغيل الفحص", "إذا لا تظهر نافذة القبول امسح الثقة وأعد المحاولة")
         )
 
-        ping?.passed == true && tcp?.passed != true -> ConnectionDiagnosis(
-            title = "الجهاز موجود لكن منفذ وميض غير متاح",
-            summary = "Ping إلى الكمبيوتر ناجح، لكن TCP/WebSocket على $ip:$port يفشل. هذا هو نفس تناقض الصور: ظهور الاسم لا يعني أن قناة الإرسال مفتوحة.",
-            likelyCauses = listOf("Windows Firewall يمنع TCP 7788", "وميض على الكمبيوتر غير مفتوح أو لم يبدأ السيرفر", "الشبكة Public/VPN/Guest تعزل الاتصالات الداخلية"),
-            nextSteps = listOf("افتح وميض على الكمبيوتر وتأكد أنه يعمل", "اسمح للمنفذ TCP 7788 وUDP 7789 في Firewall", "اجعل شبكة ويندوز Private وأوقف VPN مؤقتاً")
+        udp?.passed == true && tcp?.passed != true -> ConnectionDiagnosis(
+            title = "الاكتشاف يعمل لكن الإرسال محجوب",
+            summary = "الاكتشاف عبر UDP يعمل، لكن الإرسال من الهاتف إلى الكمبيوتر على $ip:$port محجوب. ظهور اسم الجهاز لا يعني أن قناة الإرسال مفتوحة.",
+            likelyCauses = listOf("Windows Firewall يسمح بالاكتشاف لكنه يمنع TCP 7788", "وميض على الكمبيوتر يعلن نفسه بينما WebSocket متوقف", "الشبكة Public/VPN/Guest تعزل اتصال TCP بين الأجهزة"),
+            nextSteps = listOf("أعد تشغيل وميض على الكمبيوتر", "أضف قاعدة Firewall لمنفذ TCP 7788", "جرّب نفس الشبكة بدون Guest Wi-Fi أو Hotspot معزول")
         )
 
-        udp?.passed == true && tcp?.passed != true -> ConnectionDiagnosis(
-            title = "الاكتشاف يعمل لكن الاتصال محجوب",
-            summary = "الهاتف تلقى إعلان وميض عبر UDP، لكن الاتصال الفعلي على TCP لم ينجح.",
-            likelyCauses = listOf("قاعدة UDP موجودة لكن TCP 7788 محجوب", "البرنامج يعلن نفسه بينما سيرفر WebSocket متوقف", "راوتر أو نقطة وصول تمنع TCP بين الأجهزة"),
-            nextSteps = listOf("أعد تشغيل وميض على الكمبيوتر", "أضف قاعدة Firewall لمنفذ TCP 7788", "جرّب نفس الشبكة بدون Guest Wi-Fi أو Hotspot معزول")
+        ping?.passed == true && tcp?.passed != true -> ConnectionDiagnosis(
+            title = "الجهاز موجود لكن منفذ وميض غير متاح",
+            summary = "Ping إلى الكمبيوتر ناجح، لكن TCP/WebSocket على $ip:$port يفشل. الجهاز موجود على الشبكة، لكن قناة إرسال الهاتف للكمبيوتر غير مفتوحة.",
+            likelyCauses = listOf("Windows Firewall يمنع TCP 7788", "وميض على الكمبيوتر غير مفتوح أو لم يبدأ السيرفر", "الشبكة Public/VPN/Guest تعزل الاتصالات الداخلية"),
+            nextSteps = listOf("افتح وميض على الكمبيوتر وتأكد أنه يعمل", "اسمح للمنفذ TCP 7788 وUDP 7789 في Firewall", "اجعل شبكة ويندوز Private وأوقف VPN مؤقتاً")
         )
 
         tcp?.passed == true && ws?.passed != true -> ConnectionDiagnosis(
@@ -808,7 +808,9 @@ private fun buildConnectionIssueText(
     sb.appendLine("App: ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})")
     sb.appendLine("Android: ${android.os.Build.VERSION.RELEASE} API ${android.os.Build.VERSION.SDK_INT}")
     sb.appendLine("Device: ${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL}")
+    sb.appendLine("Direction: phone_to_pc")
     sb.appendLine("Phone receiver service: ${if (WameedConnectionService.isRunning) "running" else "stopped"}")
+    sb.appendLine("Phone receiver ready: ${WameedConnectionService.isReceiverReady}")
     sb.appendLine("PC: ${WameedPrefs.getPcName(context).ifBlank { "unknown" }}")
     sb.appendLine("PC address: ${WameedPrefs.getDisplayAddress(context).ifBlank { "not configured" }}")
     sb.appendLine("Keep-alive: ${WameedPrefs.isKeepAliveEnabled(context)}")
@@ -843,6 +845,40 @@ private fun buildConnectionIssueText(
     return sb.toString()
 }
 
+private fun findDiagnosticResult(results: List<DiagResult>, prefix: String): DiagResult? =
+    results.firstOrNull { it.name.startsWith(prefix, ignoreCase = true) }
+
+private fun diagnosticStatus(results: List<DiagResult>, prefix: String): String {
+    val result = findDiagnosticResult(results, prefix) ?: return "missing"
+    return if (result.passed) "pass" else "fail"
+}
+
+private fun diagnosticEventName(results: List<DiagResult>): String {
+    val udp = findDiagnosticResult(results, "UDP")
+    val tcp = findDiagnosticResult(results, "TCP")
+    val ws = findDiagnosticResult(results, "WebSocket")
+    return when {
+        udp?.passed == true && (tcp?.passed != true || ws?.passed != true) -> "discovery_only_no_ws"
+        tcp?.passed != true || ws?.passed != true -> "phone_to_pc_unreachable"
+        else -> "phone_to_pc_ready"
+    }
+}
+
+private fun extractWifiLocalIp(wifiInfo: String): String {
+    return wifiInfo
+        .lineSequence()
+        .firstOrNull { it.startsWith("IP:") }
+        ?.substringAfter("IP:")
+        ?.trim()
+        .orEmpty()
+}
+
+private fun maskIp(ip: String): String {
+    if (ip.isBlank()) return "unknown"
+    val parts = ip.split(".")
+    return if (parts.size == 4) "${parts[0]}.${parts[1]}.${parts[2]}.x" else "non_ipv4"
+}
+
 private fun reportDiagnosticsToFirebase(
     context: Context,
     wifiInfo: String,
@@ -854,9 +890,25 @@ private fun reportDiagnosticsToFirebase(
         val failed = results.filter { !it.passed }
         val passedCount = results.count { it.passed }
         val failedNames = failed.joinToString(",") { it.name.substringBefore(" ") }.take(80)
+        val eventName = diagnosticEventName(results)
+        val direction = "phone_to_pc"
+        val localIp = extractWifiLocalIp(wifiInfo)
+        val targetIp = WameedPrefs.getPcIp(context)
+        val targetPort = WameedPrefs.getPcPort(context)
+        val udpStatus = diagnosticStatus(results, "UDP")
+        val tcpStatus = diagnosticStatus(results, "TCP")
+        val wsStatus = diagnosticStatus(results, "WebSocket")
 
         reporter.refreshContext(context)
         reporter.setCustomKey("diag_title", diagnosis.title.take(80))
+        reporter.setCustomKey("diag_event", eventName)
+        reporter.setCustomKey("diag_direction", direction)
+        reporter.setCustomKey("diag_local_ip", maskIp(localIp))
+        reporter.setCustomKey("diag_target_ip_group", maskIp(targetIp))
+        reporter.setCustomKey("diag_target_port", targetPort.toString())
+        reporter.setCustomKey("diag_udp_result", udpStatus)
+        reporter.setCustomKey("diag_tcp_result", tcpStatus)
+        reporter.setCustomKey("diag_ws_result", wsStatus)
         reporter.setCustomKey("diag_passed_count", passedCount.toString())
         reporter.setCustomKey("diag_failed_count", failed.size.toString())
         reporter.setCustomKey("diag_failed_tests", failedNames)
@@ -872,10 +924,36 @@ private fun reportDiagnosticsToFirebase(
         }
 
         reporter.logEvent("network_diagnostics", Bundle().apply {
+            putString("direction", direction)
+            putString("event_name", eventName)
+            putString("local_ip", maskIp(localIp))
+            putString("target_ip_group", maskIp(targetIp))
+            putInt("target_port", targetPort)
+            putString("udp_result", udpStatus)
+            putString("tcp_result", tcpStatus)
+            putString("ws_result", wsStatus)
             putInt("passed_count", passedCount)
             putInt("failed_count", failed.size)
             putString("failed_tests", failedNames)
         })
+
+        reporter.logEvent(eventName, Bundle().apply {
+            putString("direction", direction)
+            putString("local_ip", maskIp(localIp))
+            putString("target_ip_group", maskIp(targetIp))
+            putInt("target_port", targetPort)
+            putString("udp_result", udpStatus)
+            putString("tcp_result", tcpStatus)
+            putString("ws_result", wsStatus)
+        })
+
+        if (WameedConnectionService.isReceiverReady) {
+            reporter.logEvent("pc_to_phone_ready", Bundle().apply {
+                putString("direction", "pc_to_phone")
+                putString("local_ip", maskIp(localIp))
+                putInt("target_port", 7789)
+            })
+        }
 
         if (failed.isNotEmpty()) {
             val summary = buildString {
@@ -884,7 +962,7 @@ private fun reportDiagnosticsToFirebase(
                 append(failed.joinToString("; ") { "${it.name}: ${it.detail}".take(160) })
             }
             reporter.recordNonFatal(
-                category = "network_diagnostics_failed",
+                category = eventName,
                 message = summary,
                 throttleMs = 120_000L
             )

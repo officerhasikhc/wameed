@@ -75,11 +75,12 @@ class WameedCrashReporter private constructor() {
      */
     fun refreshContext(context: Context) {
         crashlytics.setCustomKey("pc_configured", WameedPrefs.isConfigured(context).toString())
-        crashlytics.setCustomKey("pc_port", WameedPrefs.getPcPort(context))
+        crashlytics.setCustomKey("pc_port", WameedPrefs.getPcPort(context).toString())
         crashlytics.setCustomKey("pc_ip_group", maskPrivateIp(WameedPrefs.getPcIp(context)))
         crashlytics.setCustomKey("pc_name", WameedPrefs.getPcName(context).take(80))
         crashlytics.setCustomKey("keep_alive_enabled", WameedPrefs.isKeepAliveEnabled(context).toString())
         crashlytics.setCustomKey("receiver_service_running", WameedConnectionService.isRunning.toString())
+        crashlytics.setCustomKey("phone_receiver_ready", WameedConnectionService.isReceiverReady.toString())
     }
     
     /**

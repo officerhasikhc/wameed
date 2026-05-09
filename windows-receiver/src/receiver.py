@@ -10,6 +10,7 @@ import asyncio
 import threading
 import time
 from datetime import datetime
+from urllib.parse import urlparse
 import tkinter as tk
 from tkinter import messagebox, filedialog, ttk
 from PIL import Image, ImageTk
@@ -29,10 +30,11 @@ from websockets.server import serve
 import subprocess
 
 # ======================== Configuration ========================
-VERSION = "1.4.0"
+VERSION = "1.8.5"
 APP_NAME = "وميض (Wameed)"
 PORT_WS = 7788
 PORT_UDP = 7789
+UPDATE_JSON_URL = "https://raw.githubusercontent.com/officerhasikhc/wameed/main/update.json"
 
 # ======================== Font Configuration ========================
 # خط عربي احترافي مع fallback
@@ -75,6 +77,9 @@ translations = {
         "app_header": "وميض",
         "status_ready": "⚪ غير متصل",
         "status_connected_to": "✅ متصل بـ {name}",
+        "status_receive_ready": "جاهز لاستقبال ملفات الهاتف على هذا الكمبيوتر",
+        "status_send_ready": "✅ متصل لإرسال الملفات إلى {name}",
+        "status_discovered_only": "🔵 تم اكتشاف {name} فقط — لم يتم تأكيد WebSocket بعد",
         "status_starting": "جاري التشغيل...",
         "status_searching": "🔍 جاري البحث...",
         "tab_home": "الرئيسية",
@@ -159,12 +164,39 @@ translations = {
         "diag_copy_results": "📋 نسخ النتائج",
         "diag_run": "▶ تشغيل الفحص",
         "diag_running": "جاري الفحص...",
-        "diag_title": "تشخيص الشبكة والسجل"
+        "diag_title": "تشخيص الشبكة والسجل",
+        "firewall_copy": "📋 نسخ أوامر Firewall",
+        "firewall_fix": "🛡️ إصلاح Firewall",
+        "firewall_confirm": "سيطلب ويندوز صلاحية المدير لفتح TCP 7788 و UDP 7789 لوميض. هل تريد المتابعة؟",
+        "firewall_copied": "تم نسخ أوامر Firewall",
+        "preflight_failed": "الجهاز مكتشف لكن WebSocket غير جاهز. افتح وميض على الهاتف ووافق على الاقتران.",
+        "updates_title": "التحديثات",
+        "updates_current": "الإصدار الحالي: {version}",
+        "check_updates": "البحث عن تحديثات",
+        "checking_updates": "جاري البحث عن تحديثات...",
+        "update_available_title": "تحديث جديد متاح",
+        "update_available_msg": "الإصدار {version} متاح للتثبيت.",
+        "update_release_notes": "ملاحظات الإصدار",
+        "update_now": "تحديث الآن",
+        "update_later": "لاحقاً",
+        "update_up_to_date": "أحدث إصدار مثبت",
+        "update_failed": "تعذر إكمال التحديث",
+        "update_download_start": "بدء تنزيل التحديث...",
+        "update_download_progress": "{percent}% - {done} من {total} ({speed}/ث)",
+        "update_download_unknown": "{done} تم تنزيلها ({speed}/ث)",
+        "update_installing": "جاري تشغيل المثبت. سيتم إغلاق وميض لإكمال الاستبدال.",
+        "update_ready_restart": "تم تنزيل التحديث. سيتم إغلاق وميض وتشغيل المثبت.",
+        "update_confirm_install": "سيتم إغلاق وميض وتشغيل المثبت لاستبدال النسخة الحالية. متابعة؟",
+        "update_close": "إغلاق",
+        "update_manifest_invalid": "ملف التحديث لا يحتوي على بيانات ويندوز صالحة."
     },
     "en": {
         "app_header": "Wameed",
         "status_ready": "⚪ Not connected",
         "status_connected_to": "✅ Connected to {name}",
+        "status_receive_ready": "Ready to receive phone files on this PC",
+        "status_send_ready": "✅ Ready to send files to {name}",
+        "status_discovered_only": "🔵 {name} discovered only — WebSocket not confirmed yet",
         "status_starting": "Starting...",
         "status_searching": "🔍 Searching...",
         "tab_home": "Home",
@@ -249,7 +281,31 @@ translations = {
         "diag_copy_results": "📋 Copy Results",
         "diag_run": "▶ Run Tests",
         "diag_running": "Running tests...",
-        "diag_title": "Network Diagnostics & Log"
+        "diag_title": "Network Diagnostics & Log",
+        "firewall_copy": "📋 Copy Firewall Commands",
+        "firewall_fix": "🛡️ Fix Firewall",
+        "firewall_confirm": "Windows will request administrator permission to open TCP 7788 and UDP 7789 for Wameed. Continue?",
+        "firewall_copied": "Firewall commands copied",
+        "preflight_failed": "The device is discovered but WebSocket is not ready. Open Wameed on the phone and approve pairing.",
+        "updates_title": "Updates",
+        "updates_current": "Current version: {version}",
+        "check_updates": "Check for updates",
+        "checking_updates": "Checking for updates...",
+        "update_available_title": "New update available",
+        "update_available_msg": "Version {version} is available to install.",
+        "update_release_notes": "Release notes",
+        "update_now": "Update now",
+        "update_later": "Later",
+        "update_up_to_date": "You are up to date",
+        "update_failed": "Update could not be completed",
+        "update_download_start": "Starting update download...",
+        "update_download_progress": "{percent}% - {done} of {total} ({speed}/s)",
+        "update_download_unknown": "{done} downloaded ({speed}/s)",
+        "update_installing": "Starting the installer. Wameed will close to finish replacing the app.",
+        "update_ready_restart": "The update was downloaded. Wameed will close and start the installer.",
+        "update_confirm_install": "Wameed will close and start the installer to replace the current version. Continue?",
+        "update_close": "Close",
+        "update_manifest_invalid": "The update file does not contain valid Windows update data."
     }
 }
 
@@ -586,10 +642,10 @@ class WameedApp:
         device_name = connected_device.get("name", "?") if connected_device else ""
 
         if connection_state == "connected" and device_name:
-            status_text = t("status_connected_to").format(name=device_name)
+            status_text = t("status_send_ready").format(name=device_name)
             dot_color = "#22C55E"  # أخضر
         elif connection_state == "discovered" and device_name:
-            status_text = t("status_discovered").format(name=device_name)
+            status_text = t("status_discovered_only").format(name=device_name)
             dot_color = "#3B82F6"  # أزرق
         elif connection_state == "unstable" and device_name:
             status_text = t("status_unstable").format(name=device_name)
@@ -647,7 +703,7 @@ class WameedApp:
 
                         if reachable:
                             _health_check_failures = 0
-                            if connection_state in ("unstable", "discovered"):
+                            if connection_state == "unstable":
                                 self._set_connection_state("connected", connected_device)
                         else:
                             _health_check_failures += 1
@@ -675,6 +731,11 @@ class WameedApp:
                 save_config()
                 if hasattr(self, 'home_ip_var'):
                     self.home_ip_var.set(ip)
+                self._set_connection_state("discovered", {
+                    "id": device.get("id", ""),
+                    "name": device.get("name", ip),
+                    "ip": ip
+                })
                 logger.info(f"Auto-selected discovered device: {device.get('name')} ({ip})")
 
     def _show_manual_ip_dialog(self):
@@ -707,6 +768,7 @@ class WameedApp:
                 save_config()
                 if hasattr(self, 'home_ip_var'):
                     self.home_ip_var.set(ip)
+                self._set_connection_state("discovered", {"id": "", "name": ip, "ip": ip})
                 dialog.destroy()
             else:
                 messagebox.showwarning(t("warning"), t("manual_connect_warn"))
@@ -759,36 +821,46 @@ class WameedApp:
                     status_label.config(text=t("status_verifying"), fg="#3B82F6")
                     dialog.update_idletasks()
 
-                    # التحقق من أن الجهاز يقبل الاتصال فعلياً (TCP check على port 7789)
-                    reachable = self._verify_device_connection(ip)
+                    device_info = {
+                        "id": device.get("id", ""),
+                        "name": name,
+                        "ip": ip,
+                    }
+                    self._set_connection_state("connecting", device_info)
 
-                    if reachable:
-                        logger.info(f"✅ الجهاز {name} ({ip}) متاح — فتح نافذة الإرسال")
-                        state["target_ip"] = ip
-                        save_config()
-                        if hasattr(self, 'home_ip_var'):
-                            self.home_ip_var.set(ip)
+                    def verify_and_open():
+                        ok, reason = self._verify_phone_websocket(ip, timeout=30)
 
-                        device_info = {
-                            "id": device.get("id", ""),
-                            "name": name,
-                            "ip": ip,
-                            "connected_at": datetime.now()
-                        }
-                        self._set_connection_state("connected", device_info)
-                        self.root.after(0, lambda: self.update_device_history(device.get("id", ""), name))
+                        def finish():
+                            if ok:
+                                logger.info(f"✅ WebSocket/Pairing confirmed for {name} ({ip}) — opening send dialog")
+                                state["target_ip"] = ip
+                                save_config()
+                                if hasattr(self, 'home_ip_var'):
+                                    self.home_ip_var.set(ip)
 
-                        dialog.destroy()
-                        self._show_send_dialog(device_ip=ip, device_name=name)
-                    else:
-                        logger.warning(f"⚠️ الجهاز {name} ({ip}) مكتشف لكن غير متاح")
-                        device_info = {
-                            "id": device.get("id", ""),
-                            "name": name,
-                            "ip": ip,
-                        }
-                        self._set_connection_state("discovered", device_info)
-                        status_label.config(text=t("device_not_reachable").format(name=name).split('\n')[0], fg="#EF4444")
+                                connected_info = {
+                                    "id": device.get("id", ""),
+                                    "name": name,
+                                    "ip": ip,
+                                    "connected_at": datetime.now()
+                                }
+                                self._set_connection_state("connected", connected_info)
+                                self.root.after(0, lambda: self.update_device_history(device.get("id", ""), name))
+
+                                dialog.destroy()
+                                self._show_send_dialog(device_ip=ip, device_name=name)
+                            else:
+                                logger.warning(f"⚠️ {name} ({ip}) discovered but WebSocket is not ready: {reason}")
+                                self._set_connection_state("discovered", device_info)
+                                status_label.config(
+                                    text=f"{t('preflight_failed')} ({reason})",
+                                    fg="#EF4444"
+                                )
+
+                        self.root.after(0, finish)
+
+                    threading.Thread(target=verify_and_open, daemon=True).start()
 
         devices_listbox.bind("<<ListboxSelect>>", on_device_select)
 
@@ -910,6 +982,53 @@ class WameedApp:
             return True
         except Exception:
             return False
+
+    def _verify_phone_websocket(self, ip, timeout=25):
+        """Verify PC -> phone WebSocket and pairing, not just TCP reachability."""
+        async def verify():
+            uri = f"ws://{ip}:7789"
+            async with websockets.connect(
+                uri,
+                open_timeout=min(5, timeout),
+                ping_interval=None,
+                close_timeout=1
+            ) as ws:
+                await ws.send(json.dumps({
+                    "type": "hello",
+                    "device": socket.gethostname(),
+                    "device_id": "pc_client",
+                    "app_version": VERSION
+                }))
+
+                deadline = time.time() + timeout
+                last_status = ""
+                while time.time() < deadline:
+                    remaining = max(1, deadline - time.time())
+                    try:
+                        raw = await asyncio.wait_for(ws.recv(), timeout=min(5, remaining))
+                    except asyncio.TimeoutError:
+                        continue
+
+                    try:
+                        resp = json.loads(raw)
+                    except Exception:
+                        return False, "invalid_response"
+
+                    status = resp.get("status", "")
+                    last_status = status or last_status
+                    if status == "paired":
+                        return True, "paired"
+                    if status == "rejected":
+                        return False, resp.get("message", "rejected")
+                    if status == "pairing_required":
+                        continue
+
+                return False, last_status or "timeout"
+
+        try:
+            return asyncio.run(verify())
+        except Exception as e:
+            return False, f"{type(e).__name__}: {e}"
 
     def _set_connection_state(self, new_state, device_info=None):
         """Update the unified connection state and refresh UI"""
@@ -1065,8 +1184,9 @@ class WameedApp:
 
         if target_device:
             ip = target_device.get("ip")
-            # التحقق من الاتصال الفعلي قبل فتح الإرسال
-            if self._verify_device_connection(ip):
+            # التحقق من WebSocket والاقتران قبل اعتبار الجهاز متصلاً.
+            ok, reason = self._verify_phone_websocket(ip, timeout=30)
+            if ok:
                 device_info = {
                     "id": device_id,
                     "name": device_name,
@@ -1079,7 +1199,7 @@ class WameedApp:
             else:
                 device_info = {"id": device_id, "name": device_name, "ip": ip}
                 self._set_connection_state("discovered", device_info)
-                messagebox.showwarning("تنبيه", t("device_not_reachable").format(name=device_name))
+                messagebox.showwarning("تنبيه", f"{t('preflight_failed')}\n{reason}")
         else:
             messagebox.showwarning("تنبيه", f"لم يتم العثور على الجهاز '{device_name}' في الشبكة\nتأكد من أن التطبيق مفتوح على الهاتف")
 
@@ -1100,6 +1220,12 @@ class WameedApp:
             state["target_ip"] = target_ip
             if hasattr(self, 'home_ip_var'):
                 self.home_ip_var.set(target_ip)
+            if connection_state != "connected":
+                self._set_connection_state("discovered", {
+                    "id": "",
+                    "name": device_name or target_ip,
+                    "ip": target_ip
+                })
 
             # فتح نافذة الإرسال
             self._show_send_dialog(device_ip=target_ip, device_name=device_name)
@@ -1258,6 +1384,23 @@ class WameedApp:
 
         ttk.Separator(container).pack(fill="x", pady=15)
 
+        # =================== Updates Section ===================
+        tk.Label(container, text=t("updates_title"), bg="white", font=(FONT_AR, fs(10), "bold")).pack(anchor="e" if LANG=="ar" else "w", pady=(5, 2))
+
+        update_frame = tk.Frame(container, bg="white")
+        update_frame.pack(fill="x", pady=5)
+
+        tk.Label(update_frame, text=t("updates_current").format(version=VERSION),
+                 bg="white", fg="#475569", font=(FONT_AR, fs(9))).pack(
+            side="right" if LANG=="ar" else "left", fill="x", expand=True,
+            anchor="e" if LANG=="ar" else "w")
+
+        tk.Button(update_frame, text=t("check_updates"), command=self._show_update_dialog,
+                  bg="#E0F2FE", fg="#075985", font=(FONT_AR, fs(9)), bd=0, pady=6, padx=14,
+                  cursor="hand2").pack(side="left" if LANG=="ar" else "right", padx=3)
+
+        ttk.Separator(container).pack(fill="x", pady=15)
+
         # =================== Diagnostics Section ===================
         tk.Label(container, text=t("diag_title"), bg="white", font=(FONT_AR, fs(10), "bold")).pack(anchor="e" if LANG=="ar" else "w", pady=(5, 2))
 
@@ -1275,6 +1418,364 @@ class WameedApp:
         tk.Button(diag_frame, text=t("diag_net_btn"), command=self._show_network_diagnostics,
                   bg="#FFF7ED", fg="#9A3412", font=(FONT_AR, fs(9)), bd=0, pady=6, padx=12,
                   cursor="hand2").pack(side="right" if LANG=="ar" else "left", padx=3)
+
+        tk.Button(diag_frame, text=t("firewall_copy"), command=self._copy_firewall_commands,
+                  bg="#EFF6FF", fg="#2563EB", font=(FONT_AR, fs(9)), bd=0, pady=6, padx=12,
+                  cursor="hand2").pack(side="right" if LANG=="ar" else "left", padx=3)
+
+        tk.Button(diag_frame, text=t("firewall_fix"), command=self._run_firewall_fix,
+                  bg="#FEF2F2", fg="#991B1B", font=(FONT_AR, fs(9)), bd=0, pady=6, padx=12,
+                  cursor="hand2").pack(side="right" if LANG=="ar" else "left", padx=3)
+
+    def _call_if_widget_exists(self, widget, callback):
+        try:
+            if widget.winfo_exists():
+                callback()
+        except Exception:
+            pass
+
+    def _version_tuple(self, value):
+        parts = []
+        current = ""
+        for ch in str(value or ""):
+            if ch.isdigit():
+                current += ch
+            elif current:
+                parts.append(int(current))
+                current = ""
+        if current:
+            parts.append(int(current))
+        while len(parts) < 4:
+            parts.append(0)
+        return tuple(parts[:4])
+
+    def _is_newer_version(self, remote_version, local_version=VERSION):
+        return self._version_tuple(remote_version) > self._version_tuple(local_version)
+
+    def _format_bytes(self, value):
+        try:
+            value = float(value)
+        except Exception:
+            value = 0.0
+        units = ["B", "KB", "MB", "GB"]
+        unit_index = 0
+        while value >= 1024 and unit_index < len(units) - 1:
+            value /= 1024
+            unit_index += 1
+        if unit_index == 0:
+            return f"{int(value)} {units[unit_index]}"
+        return f"{value:.1f} {units[unit_index]}"
+
+    def _update_file_name(self, update_url, version):
+        try:
+            name = os.path.basename(urlparse(update_url).path)
+        except Exception:
+            name = ""
+        if not name or not name.lower().endswith(".exe"):
+            name = f"WameedSetup-{version}.exe"
+        return name
+
+    def _center_dialog(self, dialog, width, height):
+        dialog.update_idletasks()
+        x = (dialog.winfo_screenwidth() // 2) - (width // 2)
+        y = (dialog.winfo_screenheight() // 2) - (height // 2)
+        dialog.geometry(f"{width}x{height}+{x}+{y}")
+
+    def _show_update_dialog(self):
+        dialog = tk.Toplevel(self.root)
+        dialog.title(t("updates_title"))
+        dialog.geometry("520x360")
+        dialog.configure(bg="white")
+        dialog.transient(self.root)
+        dialog.grab_set()
+
+        anchor = "e" if LANG == "ar" else "w"
+        primary_side = "right" if LANG == "ar" else "left"
+        secondary_side = "left" if LANG == "ar" else "right"
+        justify = "right" if LANG == "ar" else "left"
+
+        content = tk.Frame(dialog, bg="white", padx=24, pady=22)
+        content.pack(fill="both", expand=True)
+
+        tk.Label(content, text=t("updates_title"), bg="white", fg="#0F172A",
+                 font=(FONT_AR, fs(15), "bold")).pack(anchor=anchor)
+        tk.Label(content, text=t("updates_current").format(version=VERSION), bg="white",
+                 fg="#64748B", font=(FONT_AR, fs(9))).pack(anchor=anchor, pady=(4, 18))
+
+        title_var = tk.StringVar(value=t("checking_updates"))
+        detail_var = tk.StringVar(value="")
+        notes_var = tk.StringVar(value="")
+        progress_var = tk.StringVar(value="")
+
+        tk.Label(content, textvariable=title_var, bg="white", fg="#1E293B",
+                 font=(FONT_AR, fs(11), "bold"), justify=justify).pack(anchor=anchor)
+        tk.Label(content, textvariable=detail_var, bg="white", fg="#475569",
+                 font=(FONT_AR, fs(9)), justify=justify, wraplength=450).pack(anchor=anchor, pady=(8, 0))
+        tk.Label(content, textvariable=notes_var, bg="white", fg="#64748B",
+                 font=(FONT_AR, fs(9)), justify=justify, wraplength=450).pack(anchor=anchor, pady=(10, 0))
+
+        progress = ttk.Progressbar(content, maximum=100, mode="determinate")
+        progress.pack(fill="x", pady=(18, 4))
+        progress.pack_forget()
+
+        progress_label = tk.Label(content, textvariable=progress_var, bg="white", fg="#334155",
+                                  font=(FONT_AR, fs(9)), justify=justify)
+        progress_label.pack(anchor=anchor)
+        progress_label.pack_forget()
+
+        button_frame = tk.Frame(content, bg="white")
+        button_frame.pack(side="bottom", fill="x", pady=(20, 0))
+
+        close_btn = tk.Button(button_frame, text=t("update_close"), command=dialog.destroy,
+                              bg="#F1F5F9", fg="#334155", bd=0, padx=18, pady=8,
+                              font=(FONT_AR, fs(9)), cursor="hand2")
+        close_btn.pack(side=secondary_side, padx=4)
+
+        primary_btn = tk.Button(button_frame, text=t("checking_updates"), state="disabled",
+                                bg="#0EA5E9", fg="white", bd=0, padx=18, pady=8,
+                                font=(FONT_AR, fs(9), "bold"), cursor="hand2",
+                                activebackground="#0284C7", activeforeground="white")
+        primary_btn.pack(side=primary_side, padx=4)
+
+        ui = {
+            "dialog": dialog,
+            "title_var": title_var,
+            "detail_var": detail_var,
+            "notes_var": notes_var,
+            "progress_var": progress_var,
+            "progress": progress,
+            "progress_label": progress_label,
+            "primary_btn": primary_btn,
+            "close_btn": close_btn,
+        }
+
+        def post(callback):
+            self.root.after(0, lambda: self._call_if_widget_exists(dialog, callback))
+
+        def show_error(error_text):
+            title_var.set(t("update_failed"))
+            detail_var.set(str(error_text))
+            notes_var.set("")
+            primary_btn.config(text=t("check_updates"), state="normal", command=start_check)
+            close_btn.config(state="normal")
+            progress.pack_forget()
+            progress_label.pack_forget()
+
+        def show_result(info):
+            if self._is_newer_version(info["version"]):
+                title_var.set(t("update_available_title"))
+                detail_var.set(t("update_available_msg").format(version=info["version"]))
+                notes = info.get("releaseNotes") or ""
+                notes_var.set(f"{t('update_release_notes')}: {notes}" if notes else "")
+                primary_btn.config(text=t("update_now"), state="normal",
+                                   command=lambda: start_download(info))
+            else:
+                title_var.set(t("update_up_to_date"))
+                detail_var.set(t("updates_current").format(version=VERSION))
+                notes_var.set("")
+                primary_btn.config(text=t("check_updates"), state="normal", command=start_check)
+            close_btn.config(text=t("update_close"), state="normal")
+            progress.pack_forget()
+            progress_label.pack_forget()
+
+        def start_download(info):
+            if not messagebox.askyesno(t("update_available_title"), t("update_confirm_install"), parent=dialog):
+                return
+            self._download_windows_update(info, ui)
+
+        def start_check():
+            title_var.set(t("checking_updates"))
+            detail_var.set("")
+            notes_var.set("")
+            progress.pack_forget()
+            progress_label.pack_forget()
+            primary_btn.config(text=t("checking_updates"), state="disabled")
+            close_btn.config(state="disabled")
+
+            def worker():
+                try:
+                    response = requests.get(
+                        UPDATE_JSON_URL,
+                        timeout=15,
+                        headers={"User-Agent": f"Wameed-Windows/{VERSION}"}
+                    )
+                    response.raise_for_status()
+                    manifest = response.json()
+                    info = manifest.get("windows") or {}
+                    version = str(info.get("version", "")).strip()
+                    update_url = str(info.get("updateUrl", "")).strip()
+                    if not version or not update_url:
+                        raise ValueError(t("update_manifest_invalid"))
+                    update_info = {
+                        "version": version,
+                        "updateUrl": update_url,
+                        "releaseNotes": str(info.get("releaseNotes", "")).strip()
+                    }
+                    post(lambda: show_result(update_info))
+                except Exception as exc:
+                    logger.exception("Windows update check failed")
+                    post(lambda error=exc: show_error(error))
+
+            threading.Thread(target=worker, daemon=True).start()
+
+        self._center_dialog(dialog, 520, 360)
+        start_check()
+
+    def _download_windows_update(self, info, ui):
+        dialog = ui["dialog"]
+        title_var = ui["title_var"]
+        detail_var = ui["detail_var"]
+        notes_var = ui["notes_var"]
+        progress_var = ui["progress_var"]
+        progress = ui["progress"]
+        progress_label = ui["progress_label"]
+        primary_btn = ui["primary_btn"]
+        close_btn = ui["close_btn"]
+
+        def post(callback):
+            self.root.after(0, lambda: self._call_if_widget_exists(dialog, callback))
+
+        def show_error(error_text):
+            title_var.set(t("update_failed"))
+            detail_var.set(str(error_text))
+            notes_var.set("")
+            progress_var.set("")
+            primary_btn.config(text=t("check_updates"), state="normal",
+                               command=lambda: (dialog.destroy(), self._show_update_dialog()))
+            close_btn.config(state="normal")
+
+        def show_ready(installer_path):
+            title_var.set(t("update_ready_restart"))
+            detail_var.set(t("update_installing"))
+            notes_var.set("")
+            progress["value"] = 100
+            progress_var.set(t("update_download_progress").format(
+                percent=100,
+                done=self._format_bytes(os.path.getsize(installer_path)),
+                total=self._format_bytes(os.path.getsize(installer_path)),
+                speed=self._format_bytes(0)
+            ))
+            primary_btn.config(state="disabled")
+            close_btn.config(state="disabled")
+            self.root.after(800, lambda: self._launch_update_installer(installer_path, dialog))
+
+        def worker():
+            try:
+                update_url = info["updateUrl"]
+                version = info["version"]
+                updates_dir = os.path.join(APP_DATA_DIR, "updates")
+                os.makedirs(updates_dir, exist_ok=True)
+                installer_path = os.path.join(updates_dir, self._update_file_name(update_url, version))
+                if os.path.exists(installer_path):
+                    os.remove(installer_path)
+
+                post(lambda: (
+                    title_var.set(t("update_download_start")),
+                    detail_var.set(t("update_available_msg").format(version=version)),
+                    notes_var.set(""),
+                    progress.config(mode="determinate", maximum=100, value=0),
+                    progress.pack(fill="x", pady=(18, 4)),
+                    progress_label.pack(anchor="e" if LANG == "ar" else "w"),
+                    progress_var.set(""),
+                    primary_btn.config(state="disabled"),
+                    close_btn.config(state="disabled")
+                ))
+
+                downloaded = 0
+                start_time = time.time()
+                last_ui_time = 0.0
+                with requests.get(
+                    update_url,
+                    stream=True,
+                    timeout=(15, 300),
+                    headers={"User-Agent": f"Wameed-Windows/{VERSION}"}
+                ) as response:
+                    response.raise_for_status()
+                    total = int(response.headers.get("content-length") or 0)
+                    with open(installer_path, "wb") as output:
+                        for chunk in response.iter_content(chunk_size=1024 * 1024):
+                            if not chunk:
+                                continue
+                            output.write(chunk)
+                            downloaded += len(chunk)
+                            now = time.time()
+                            if now - last_ui_time < 0.12 and (not total or downloaded < total):
+                                continue
+                            last_ui_time = now
+                            elapsed = max(now - start_time, 0.001)
+                            speed = downloaded / elapsed
+                            if total:
+                                percent = min(100, int((downloaded / total) * 100))
+                                text = t("update_download_progress").format(
+                                    percent=percent,
+                                    done=self._format_bytes(downloaded),
+                                    total=self._format_bytes(total),
+                                    speed=self._format_bytes(speed)
+                                )
+                            else:
+                                percent = 0
+                                text = t("update_download_unknown").format(
+                                    done=self._format_bytes(downloaded),
+                                    speed=self._format_bytes(speed)
+                                )
+                            post(lambda p=percent, label=text: (
+                                progress.config(value=p),
+                                progress_var.set(label)
+                            ))
+
+                if downloaded <= 0:
+                    raise IOError("Downloaded installer is empty")
+                post(lambda path=installer_path: show_ready(path))
+            except Exception as exc:
+                logger.exception("Windows update download failed")
+                post(lambda error=exc: show_error(error))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _launch_update_installer(self, installer_path, dialog=None):
+        def ps_quote(value):
+            return "'" + str(value).replace("'", "''") + "'"
+
+        try:
+            installer_path = os.path.abspath(installer_path)
+            updates_dir = os.path.join(APP_DATA_DIR, "updates")
+            os.makedirs(updates_dir, exist_ok=True)
+            script_path = os.path.join(updates_dir, "apply_wameed_update.ps1")
+            current_exe = sys.executable if getattr(sys, "frozen", False) else os.path.abspath(sys.argv[0])
+            fallback_exe = os.path.join(os.environ.get("ProgramFiles", r"C:\Program Files"), "Wameed", "Wameed.exe")
+            script = f"""$ErrorActionPreference = 'SilentlyContinue'
+$PidToWait = {os.getpid()}
+$Installer = {ps_quote(installer_path)}
+$CurrentExe = {ps_quote(current_exe)}
+$FallbackExe = {ps_quote(fallback_exe)}
+try {{ Wait-Process -Id $PidToWait -Timeout 20 }} catch {{}}
+try {{ Get-Process -Name 'Wameed' -ErrorAction SilentlyContinue | Stop-Process -Force }} catch {{}}
+$InstallArgs = '/SILENT /SUPPRESSMSGBOXES /CLOSEAPPLICATIONS /RESTARTAPPLICATIONS'
+try {{ Start-Process -FilePath $Installer -ArgumentList $InstallArgs -Verb RunAs -Wait }} catch {{ exit 1 }}
+Start-Sleep -Seconds 2
+if (($CurrentExe.ToLower().EndsWith('.exe')) -and (Test-Path $CurrentExe)) {{
+    Start-Process -FilePath $CurrentExe
+}} elseif (Test-Path $FallbackExe) {{
+    Start-Process -FilePath $FallbackExe
+}}
+"""
+            with open(script_path, "w", encoding="utf-8") as script_file:
+                script_file.write(script)
+            flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+            subprocess.Popen(
+                ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script_path],
+                creationflags=flags
+            )
+            logger.info(f"Windows update installer launched: {installer_path}")
+            try:
+                if dialog and dialog.winfo_exists():
+                    dialog.destroy()
+            except Exception:
+                pass
+            self.quit_app()
+        except Exception as exc:
+            logger.exception("Failed to launch update installer")
+            messagebox.showerror(t("update_failed"), str(exc), parent=dialog)
 
     def _open_log_file(self):
         """فتح مجلد السجل"""
@@ -1376,29 +1877,36 @@ class WameedApp:
 
             # 1. Local network info
             results_text.insert(tk.END, "--- Local Network ---\n", "header")
+            local_ip = ""
             try:
                 hostname = socket.gethostname()
                 local_ip = socket.gethostbyname(hostname)
                 results_text.insert(tk.END, f"Hostname: {hostname}\n")
                 results_text.insert(tk.END, f"Local IP: {local_ip}\n")
+                results_text.insert(tk.END, f"Expected PC receive server: 0.0.0.0:{PORT_WS}\n")
             except Exception as e:
                 results_text.insert(tk.END, f"Error getting local info: {e}\n", "fail")
 
             # 2. Check ports
             results_text.insert(tk.END, f"\n--- Port Status ---\n", "header")
 
-            # Check WS port
-            try:
-                test_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                test_sock.settimeout(1)
-                result = test_sock.connect_ex(('127.0.0.1', PORT_WS))
-                test_sock.close()
-                if result == 0:
-                    results_text.insert(tk.END, f"✅ Port {PORT_WS} (WebSocket): OPEN\n", "pass")
-                else:
-                    results_text.insert(tk.END, f"❌ Port {PORT_WS} (WebSocket): CLOSED\n", "fail")
-            except Exception as e:
-                results_text.insert(tk.END, f"❌ Port {PORT_WS}: Error - {e}\n", "fail")
+            def check_tcp(host, port, label):
+                try:
+                    test_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                    test_sock.settimeout(1)
+                    result = test_sock.connect_ex((host, port))
+                    test_sock.close()
+                    if result == 0:
+                        results_text.insert(tk.END, f"✅ {label} {host}:{port}: OPEN\n", "pass")
+                    else:
+                        results_text.insert(tk.END, f"❌ {label} {host}:{port}: CLOSED\n", "fail")
+                except Exception as e:
+                    results_text.insert(tk.END, f"❌ {label} {host}:{port}: Error - {e}\n", "fail")
+
+            # Check PC receiver port from loopback and LAN address.
+            check_tcp('127.0.0.1', PORT_WS, "PC receiver TCP")
+            if local_ip and local_ip != '127.0.0.1':
+                check_tcp(local_ip, PORT_WS, "PC receiver LAN TCP")
 
             # Check UDP port
             try:
@@ -1481,10 +1989,11 @@ class WameedApp:
 
             # 4. Firewall hint
             results_text.insert(tk.END, f"\n--- Firewall Note ---\n", "header")
-            results_text.insert(tk.END, "If tests fail, check Windows Firewall:\n")
-            results_text.insert(tk.END, f"  - Allow inbound TCP on port {PORT_WS}\n")
-            results_text.insert(tk.END, f"  - Allow inbound/outbound UDP on port {PORT_UDP}\n")
-            results_text.insert(tk.END, "  - Allow Python through the firewall\n")
+            results_text.insert(tk.END, "If tests fail, check Windows Firewall and network profile:\n")
+            results_text.insert(tk.END, f"  - Phone -> PC requires inbound TCP {PORT_WS}\n")
+            results_text.insert(tk.END, f"  - Discovery requires UDP {PORT_UDP}\n")
+            results_text.insert(tk.END, "  - PC -> Phone requires outbound TCP 7789\n")
+            results_text.insert(tk.END, "  - Private network is recommended; Guest/VPN networks can isolate devices\n")
 
             results_text.insert(tk.END, f"\n{'='*40}\n", "header")
             results_text.config(state="disabled")
@@ -1495,6 +2004,7 @@ class WameedApp:
             content = results_text.get("1.0", tk.END)
             dialog.clipboard_clear()
             dialog.clipboard_append(content)
+            logger.info("Network diagnostic results copied")
 
         # Buttons
         btn_bar = tk.Frame(dialog, bg="white", pady=8)
@@ -1508,10 +2018,51 @@ class WameedApp:
                   bg="#E2E8F0", fg="#1E293B", font=(FONT_AR, fs(9)), bd=0, pady=6, padx=15,
                   cursor="hand2").pack(side="right" if LANG=="ar" else "left", padx=3)
 
+        tk.Button(btn_bar, text=t("firewall_copy"), command=self._copy_firewall_commands,
+                  bg="#EFF6FF", fg="#2563EB", font=(FONT_AR, fs(9)), bd=0, pady=6, padx=12,
+                  cursor="hand2").pack(side="right" if LANG=="ar" else "left", padx=3)
+
+        tk.Button(btn_bar, text=t("firewall_fix"), command=self._run_firewall_fix,
+                  bg="#FEF2F2", fg="#991B1B", font=(FONT_AR, fs(9)), bd=0, pady=6, padx=12,
+                  cursor="hand2").pack(side="right" if LANG=="ar" else "left", padx=3)
+
         scrollbar = tk.Scrollbar(dialog, command=results_text.yview)
         results_text.configure(yscrollcommand=scrollbar.set)
         scrollbar.pack(side="right", fill="y")
         results_text.pack(fill="both", expand=True, padx=5, pady=5)
+
+    def _firewall_commands(self):
+        return [
+            f'netsh advfirewall firewall add rule name="Wameed TCP {PORT_WS}" dir=in action=allow protocol=TCP localport={PORT_WS}',
+            f'netsh advfirewall firewall add rule name="Wameed UDP {PORT_UDP} In" dir=in action=allow protocol=UDP localport={PORT_UDP}',
+            f'netsh advfirewall firewall add rule name="Wameed UDP {PORT_UDP} Out" dir=out action=allow protocol=UDP localport={PORT_UDP}',
+            'netsh advfirewall firewall add rule name="Wameed TCP 7789 Out" dir=out action=allow protocol=TCP remoteport=7789',
+        ]
+
+    def _copy_firewall_commands(self):
+        commands = "\n".join(self._firewall_commands())
+        self.root.clipboard_clear()
+        self.root.clipboard_append(commands)
+        logger.info("Firewall commands copied to clipboard")
+        messagebox.showinfo("Wameed", t("firewall_copied"))
+
+    def _run_firewall_fix(self):
+        if not messagebox.askyesno("Wameed", t("firewall_confirm")):
+            return
+        try:
+            script_path = os.path.join(APP_DATA_DIR, "wameed_firewall_fix.ps1")
+            script = "\n".join(self._firewall_commands()) + "\n"
+            with open(script_path, "w", encoding="utf-8") as f:
+                f.write(script)
+            safe_path = script_path.replace('"', '`"')
+            subprocess.Popen([
+                "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command",
+                f'Start-Process powershell -Verb RunAs -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File \\"{safe_path}\\""'
+            ])
+            logger.info(f"Firewall fix launched with elevation script: {script_path}")
+        except Exception as e:
+            logger.error(f"Failed to run firewall fix: {e}")
+            messagebox.showerror(t("error"), str(e))
 
     def _broadcast_discovery(self, timeout=2.0):
         """يرسل رسالة UDP Broadcast للبحث عن الهواتف التي تشغل تطبيق وميض"""
@@ -1607,27 +2158,39 @@ class WameedApp:
             mode = tabs.index(tabs.select())
             logger.info(f"Send button clicked. Mode: {'Files' if mode == 0 else 'Text'}, Target IP: {ip}")
 
-            self.send_status_frame.pack(fill="x", before=send_btn, pady=(4, 0))
-            send_btn.config(state="disabled", text=t("sending_progress"),
-                          bg="#66BB6A", cursor="watch")
-
             if mode == 0: # ملفات
                 if not self.selected_files:
                     logger.warning("⚠️ محاولة إرسال فاشلة: لم يتم اختيار ملفات")
                     messagebox.showerror(t("error"), t("select_file_first"))
-                    self.send_status_frame.pack_forget()
-                    send_btn.config(state="normal", text=f"⚡ {t('send_now')}", bg="#2E7D32", cursor="hand2")
                     return
-                logger.info(f"Starting to send {len(self.selected_files)} files to {ip}")
-                threading.Thread(target=self._execute_multi_send, args=(ip, self.selected_files, win, send_btn, device_name), daemon=True).start()
             else: # نص
                 txt = self.send_text_area.get("1.0", "end").strip()
                 if not txt:
                     logger.warning("Send attempt failed: Text area is empty.")
                     messagebox.showerror(t("error"), t("enter_text_first"))
-                    self.send_status_frame.pack_forget()
-                    send_btn.config(state="normal", text=f"⚡ {t('send_now')}", bg="#2E7D32", cursor="hand2")
                     return
+
+            self.send_status_frame.pack(fill="x", before=send_btn, pady=(4, 0))
+            send_btn.config(state="disabled", text=t("sending_progress"),
+                          bg="#66BB6A", cursor="watch")
+
+            if not self._verify_device_connection(ip, timeout=2.0):
+                logger.warning(f"⚠️ Preflight failed before sending to {ip}: TCP 7789 is not reachable")
+                device_info = {
+                    "id": connected_device.get("id", "") if connected_device else "",
+                    "name": device_name or (connected_device.get("name") if connected_device else ip),
+                    "ip": ip
+                }
+                self._set_connection_state("discovered", device_info)
+                self._show_inline_message(win, t("preflight_failed"), "#EF4444", duration=4000)
+                self.send_status_frame.pack_forget()
+                send_btn.config(state="normal", text=f"⚡ {t('send_now')}", bg="#2E7D32", cursor="hand2")
+                return
+
+            if mode == 0: # ملفات
+                logger.info(f"Starting to send {len(self.selected_files)} files to {ip}")
+                threading.Thread(target=self._execute_multi_send, args=(ip, self.selected_files, win, send_btn, device_name), daemon=True).start()
+            else: # نص
                 logger.info(f"Starting to send text content ({len(txt)} chars) to {ip}")
                 threading.Thread(target=self._execute_send_text, args=(ip, txt, win, self.progress_var, device_name, lambda: win.destroy()), daemon=True).start()
 
@@ -2063,10 +2626,14 @@ class WameedApp:
                 pass
             self.tray_icon = None
         def _status_text():
-            if connected_device and connected_device.get("name"):
+            if connection_state == "connected" and connected_device and connected_device.get("name"):
                 name = connected_device["name"]
                 ip   = connected_device.get("ip", "")
                 return f"✅ متصل: {name} ({ip})"
+            elif connection_state == "discovered" and connected_device and connected_device.get("name"):
+                name = connected_device["name"]
+                ip   = connected_device.get("ip", "")
+                return f"🔵 مكتشف فقط: {name} ({ip})"
             elif last_connection_time:
                 mins = int((datetime.now() - last_connection_time).total_seconds() / 60)
                 return f"⚪ آخر اتصال: {mins} دقيقة"
