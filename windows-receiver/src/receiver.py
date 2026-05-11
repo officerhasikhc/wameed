@@ -30,7 +30,7 @@ from websockets.server import serve
 import subprocess
 
 # ======================== Configuration ========================
-VERSION = "1.8.5"
+VERSION = "1.8.6"
 APP_NAME = "وميض (Wameed)"
 PORT_WS = 7788
 PORT_UDP = 7789
@@ -188,7 +188,8 @@ translations = {
         "update_ready_restart": "تم تنزيل التحديث. سيتم إغلاق وميض وتشغيل المثبت.",
         "update_confirm_install": "سيتم إغلاق وميض وتشغيل المثبت لاستبدال النسخة الحالية. متابعة؟",
         "update_close": "إغلاق",
-        "update_manifest_invalid": "ملف التحديث لا يحتوي على بيانات ويندوز صالحة."
+        "update_manifest_invalid": "ملف التحديث لا يحتوي على بيانات ويندوز صالحة.",
+        "firewall_blocked_msg": "يبدو أن Windows Firewall يحجب منفذ TCP 7788 المطلوب لاستقبال الملفات من الهاتف.\n\nهل تريد إضافة قاعدة Firewall تلقائياً؟ (يتطلب صلاحية المدير)"
     },
     "en": {
         "app_header": "Wameed",
@@ -305,7 +306,8 @@ translations = {
         "update_ready_restart": "The update was downloaded. Wameed will close and start the installer.",
         "update_confirm_install": "Wameed will close and start the installer to replace the current version. Continue?",
         "update_close": "Close",
-        "update_manifest_invalid": "The update file does not contain valid Windows update data."
+        "update_manifest_invalid": "The update file does not contain valid Windows update data.",
+        "firewall_blocked_msg": "Windows Firewall appears to be blocking TCP port 7788 required to receive files from the phone.\n\nWould you like to add a firewall rule automatically? (Requires administrator permission)"
     }
 }
 
@@ -678,8 +680,51 @@ class WameedApp:
             self._last_logged_status = new_status
             logger.info(f"🔄 تحديث الحالة: {new_status}")
 
+    def _check_firewall_on_startup(self):
+        """فحص Firewall عند أول تشغيل — يكتشف إذا كان TCP 7788 محجوباً من الشبكة المحلية"""
+        if state.get("firewall_checked"):
+            return  # تم الفحص سابقاً
+
+        def _do_check():
+            time.sleep(3)  # انتظار بدء WS server
+            local_ip = get_local_ip()
+            if not _is_usable_ipv4(local_ip):
+                return
+
+            # فحص: هل المنفذ مفتوح من الـ LAN IP (ليس localhost)؟
+            try:
+                s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                s.settimeout(2)
+                s.connect((local_ip, PORT_WS))
+                s.close()
+                logger.info(f"✅ فحص Firewall: المنفذ TCP {PORT_WS} مفتوح على {local_ip}")
+                state["firewall_checked"] = True
+                save_config()
+            except (ConnectionRefusedError, OSError) as e:
+                logger.warning(f"⚠️ فحص Firewall: المنفذ TCP {PORT_WS} محجوب على {local_ip}: {e}")
+                # عرض رسالة للمستخدم مع خيار الإصلاح
+                self.root.after(0, self._show_firewall_warning)
+
+        threading.Thread(target=_do_check, daemon=True).start()
+
+    def _show_firewall_warning(self):
+        """عرض تنبيه Firewall مع زر إصلاح تلقائي"""
+        result = messagebox.askyesno(
+            "Wameed — Firewall",
+            t("firewall_blocked_msg"),
+            icon="warning"
+        )
+        if result:
+            self._run_firewall_fix()
+            # بعد الإصلاح، علّم أنه تم الفحص
+            state["firewall_checked"] = True
+            save_config()
+
     def _start_connection_monitor(self):
         """بدء مراقبة الاتصال الدورية مع فحص TCP فعلي"""
+        # فحص Firewall عند أول تشغيل
+        self._check_firewall_on_startup()
+
         def monitor():
             global _health_check_failures, connection_state
 
@@ -1334,8 +1379,33 @@ class WameedApp:
     def _build_settings(self):
         for w in self.tab_settings.winfo_children(): w.destroy()
 
-        container = tk.Frame(self.tab_settings, bg="white", padx=20, pady=20)
-        container.pack(fill="both", expand=True)
+        canvas = tk.Canvas(self.tab_settings, bg="white", highlightthickness=0)
+        scroll = ttk.Scrollbar(self.tab_settings, orient="vertical", command=canvas.yview)
+        container = tk.Frame(canvas, bg="white", padx=20, pady=20)
+        container_window = canvas.create_window((0, 0), window=container, anchor="nw")
+
+        def _sync_scroll_region(_event=None):
+            canvas.configure(scrollregion=canvas.bbox("all"))
+
+        def _sync_width(event):
+            canvas.itemconfigure(container_window, width=event.width)
+
+        def _on_mousewheel(event):
+            canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+
+        def _bind_mousewheel(_event):
+            canvas.bind_all("<MouseWheel>", _on_mousewheel)
+
+        def _unbind_mousewheel(_event):
+            canvas.unbind_all("<MouseWheel>")
+
+        container.bind("<Configure>", _sync_scroll_region)
+        canvas.bind("<Configure>", _sync_width)
+        canvas.bind("<Enter>", _bind_mousewheel)
+        canvas.bind("<Leave>", _unbind_mousewheel)
+        canvas.configure(yscrollcommand=scroll.set)
+        scroll.pack(side="right", fill="y")
+        canvas.pack(side="left", fill="both", expand=True)
 
         # Language
         tk.Label(container, text=t("lang_label"), bg="white", font=(FONT_AR, fs(10), "bold")).pack(anchor="e" if LANG=="ar" else "w")
@@ -1373,15 +1443,6 @@ class WameedApp:
         tk.Checkbutton(container, text=t("auto_open_folder_label"), variable=self.auto_open_folder_var,
                        bg="white", font=(FONT_AR, fs(10)), command=self.toggle_auto_open_folder).pack(anchor="e" if LANG=="ar" else "w", pady=(0, 10))
 
-        # Trusted Devices
-        tk.Label(container, text=t("trusted_devices"), bg="white", font=(FONT_AR, fs(10), "bold")).pack(anchor="e" if LANG=="ar" else "w", pady=(10, 2))
-        self.devices_list = tk.Listbox(container, height=5, font=(FONT_AR, fs(9)), bd=1, relief="solid")
-        self.devices_list.pack(fill="x")
-        self.refresh_devices_list()
-
-        tk.Button(container, text=t("delete_device"), command=self.remove_device,
-                  bg="#FEE2E2", fg="#991B1B", bd=0, pady=5, font=(FONT_AR, fs(9))).pack(anchor="e" if LANG=="ar" else "w", pady=5)
-
         ttk.Separator(container).pack(fill="x", pady=15)
 
         # =================== Updates Section ===================
@@ -1398,6 +1459,17 @@ class WameedApp:
         tk.Button(update_frame, text=t("check_updates"), command=self._show_update_dialog,
                   bg="#E0F2FE", fg="#075985", font=(FONT_AR, fs(9)), bd=0, pady=6, padx=14,
                   cursor="hand2").pack(side="left" if LANG=="ar" else "right", padx=3)
+
+        ttk.Separator(container).pack(fill="x", pady=15)
+
+        # Trusted Devices
+        tk.Label(container, text=t("trusted_devices"), bg="white", font=(FONT_AR, fs(10), "bold")).pack(anchor="e" if LANG=="ar" else "w", pady=(10, 2))
+        self.devices_list = tk.Listbox(container, height=5, font=(FONT_AR, fs(9)), bd=1, relief="solid")
+        self.devices_list.pack(fill="x")
+        self.refresh_devices_list()
+
+        tk.Button(container, text=t("delete_device"), command=self.remove_device,
+                  bg="#FEE2E2", fg="#991B1B", bd=0, pady=5, font=(FONT_AR, fs(9))).pack(anchor="e" if LANG=="ar" else "w", pady=5)
 
         ttk.Separator(container).pack(fill="x", pady=15)
 
@@ -3139,6 +3211,8 @@ def udp_broadcast():
                 "ip":      get_local_ip_for_peer(peer_ip),
                 "port":    PORT_WS,
                 "version": VERSION,
+                "ws_ready": True,
+                "connection_state": connection_state,
             }, ensure_ascii=False).encode("utf-8")
 
         while state["running"]:

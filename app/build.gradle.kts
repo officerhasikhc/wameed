@@ -24,8 +24,8 @@ android {
         applicationId = "com.wameed"
         minSdk = 26
         targetSdk = 36
-        versionCode = 16
-        versionName = "1.8.6"
+        versionCode = 18
+        versionName = "1.8.8"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
