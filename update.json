@@ -7,7 +7,7 @@
     "releaseNotes": "تحسين نظام التحديث التلقائي وإصلاح مشكلة تعارض الحزمة."
   },
   "windows": {
-    "version": "1.8.8",
+    "version": "1.8.9",
     "updateUrl": "https://github.com/officerhasikhc/wameed/releases/download/1.8.9/WameedSetup-1.8.9.exe",
     "releaseNotes": "تحسينات في واجهة المستخدم ودعم التحديثات التلقائية."
   }
