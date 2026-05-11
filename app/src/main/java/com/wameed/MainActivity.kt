@@ -594,7 +594,6 @@ fun MainScreen(sender: WameedSender, discovery: DeviceDiscovery, updateManager: 
         when (selectedTab) {
             0 -> ConnectionTab(
                 modifier = Modifier.padding(padding),
-                receivingReady = receivingReady,
                 connectionState = connectionState,
                 statusText = statusText,
                 selectedDevice = selectedDevice,
@@ -676,7 +675,6 @@ fun MainScreen(sender: WameedSender, discovery: DeviceDiscovery, updateManager: 
 @Composable
 fun ConnectionTab(
     modifier: Modifier,
-    receivingReady: Boolean,
     connectionState: ConnectionState,
     statusText: String,
     selectedDevice: DeviceDiscovery.DiscoveredDevice?,
@@ -700,8 +698,6 @@ fun ConnectionTab(
             .verticalScroll(scrollState)
             .padding(horizontal = 20.dp, vertical = 16.dp)
     ) {
-        ReceiveStatusCard(receivingReady)
-        Spacer(modifier = Modifier.height(10.dp))
         StatusCard(connectionState, statusText, selectedDevice)
         Spacer(modifier = Modifier.height(20.dp))
 
@@ -1595,55 +1591,6 @@ fun TrustedDevicesTab(modifier: Modifier, onBack: () -> Unit) {
 }
 
 @Composable
-fun ReceiveStatusCard(isReady: Boolean) {
-    val dotColor = if (isReady) Color(0xFF22C55E) else Color(0xFF9CA3AF)
-    val bgColor = if (isReady) Color(0xFFF0FFF4) else Color.White
-    val status = if (isReady) R.string.receive_ready_from_pc else R.string.receive_not_ready_from_pc
-
-    Surface(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(20.dp),
-        color = bgColor,
-        shadowElevation = 1.dp
-    ) {
-        Row(
-            modifier = Modifier.padding(20.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Box(
-                modifier = Modifier
-                    .size(12.dp)
-                    .clip(CircleShape)
-                    .background(dotColor)
-            )
-            Spacer(modifier = Modifier.width(14.dp))
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    stringResource(R.string.receive_path_title),
-                    fontWeight = FontWeight.Medium,
-                    fontSize = 12.sp,
-                    color = Color(0xFF64748B)
-                )
-                Text(
-                    stringResource(status),
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 16.sp,
-                    color = if (isReady) Color(0xFF166534) else Color(0xFF475569)
-                )
-            }
-            if (isReady) {
-                Icon(
-                    Icons.Default.CheckCircle,
-                    contentDescription = null,
-                    tint = Color(0xFF22C55E),
-                    modifier = Modifier.size(18.dp)
-                )
-            }
-        }
-    }
-}
-
-@Composable
 fun StatusCard(
     state: ConnectionState,
     statusText: String,
@@ -1672,10 +1619,20 @@ fun StatusCard(
         ConnectionState.Searching -> Color(0xFFEFF6FF)
         ConnectionState.Idle -> Color.White
     }
-    val sendStatusText = if (statusText.isBlank()) {
-        stringResource(R.string.send_not_ready_to_pc)
-    } else {
-        statusText
+
+    // نص الحالة الموحّد: "متصل بـ X" أو حالة أخرى
+    val displayText = when {
+        state == ConnectionState.Connected && device != null -> {
+            val name = if (device.name.isNotBlank() && device.name != device.ip && device.name != device.address)
+                device.name else device.address
+            stringResource(R.string.connected_to_device, name)
+        }
+        state == ConnectionState.Discovered && device != null -> {
+            val name = if (device.name.isNotBlank() && device.name != device.ip) device.name else device.address
+            stringResource(R.string.connected_to_device, name)
+        }
+        statusText.isNotBlank() -> statusText
+        else -> stringResource(R.string.not_connected)
     }
 
     Surface(
@@ -1697,34 +1654,16 @@ fun StatusCard(
             Spacer(modifier = Modifier.width(14.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    stringResource(R.string.send_path_title),
-                    fontWeight = FontWeight.Medium,
-                    fontSize = 12.sp,
-                    color = Color(0xFF64748B)
-                )
-                Text(
-                    sendStatusText,
+                    displayText,
                     fontWeight = FontWeight.Bold,
-                    fontSize = 16.sp
+                    fontSize = 16.sp,
+                    color = if (state == ConnectionState.Connected) Color(0xFF166534) else Color(0xFF1E293B)
                 )
                 if (device != null && state == ConnectionState.Connected) {
-                    val hasFriendlyName = device.name.isNotBlank()
-                            && device.name != device.ip
-                            && device.name != device.address
-                    if (hasFriendlyName) {
-                        Text(
-                            "\uD83D\uDCBB ${device.name}",
-                            fontWeight = FontWeight.Medium,
-                            fontSize = 13.sp,
-                            color = Color(0xFF166534)
-                        )
-                    }
-                    Text(device.address, fontSize = 12.sp, color = Color.Gray)
-                    Icon(
-                        Icons.Default.CheckCircle,
-                        contentDescription = null,
-                        tint = Color(0xFF22C55E),
-                        modifier = Modifier.size(16.dp).padding(top = 4.dp)
+                    Text(
+                        device.address,
+                        fontSize = 12.sp,
+                        color = Color(0xFF64748B)
                     )
                 }
             }
@@ -1736,6 +1675,14 @@ fun StatusCard(
                     modifier = Modifier.size(20.dp),
                     strokeWidth = 2.dp,
                     color = dotColor
+                )
+            }
+            if (state == ConnectionState.Connected) {
+                Icon(
+                    Icons.Default.CheckCircle,
+                    contentDescription = null,
+                    tint = Color(0xFF22C55E),
+                    modifier = Modifier.size(20.dp)
                 )
             }
         }

@@ -33,6 +33,7 @@
     <string name="tab_settings">Settings</string>
     <string name="connecting_to">Connecting to %s&#8230;</string>
     <string name="connected_to">Connected to %s</string>
+    <string name="connected_to_device">Connected to %s</string>
     <string name="connection_failed_to">Connection to %s failed</string>
     <string name="searching_devices">Searching for devices&#8230;</string>
     <string name="no_devices_found">No devices found</string>

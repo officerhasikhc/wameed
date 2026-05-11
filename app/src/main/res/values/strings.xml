@@ -33,6 +33,7 @@
     <string name="tab_settings">الإعدادات</string>
     <string name="connecting_to">جارٍ الاتصال بـ %s&#8230;</string>
     <string name="connected_to">متصل بـ %s</string>
+    <string name="connected_to_device">متصل بـ %s</string>
     <string name="connection_failed_to">فشل الاتصال بـ %s</string>
     <string name="searching_devices">جارٍ البحث عن أجهزة&#8230;</string>
     <string name="no_devices_found">لم يُعثر على أجهزة</string>
