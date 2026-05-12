@@ -17,7 +17,9 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import java.io.File
+import java.io.FileInputStream
 import java.io.FileOutputStream
+import java.io.IOException
 import java.util.concurrent.TimeUnit
 
 /**
@@ -59,6 +61,15 @@ class WameedUpdateManager private constructor(private val context: Context) {
         }
     }
 
+    private fun updateRequest(url: String): Request {
+        return Request.Builder()
+            .url(url)
+            .header("User-Agent", "Wameed-Android/${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})")
+            .header("Cache-Control", "no-cache")
+            .header("Pragma", "no-cache")
+            .build()
+    }
+
     /**
      * التحقق من وجود تحديثات من GitHub
      * @param isManual إذا كان البحث يدوياً من الإعدادات لإظهار حالة التحميل
@@ -76,7 +87,7 @@ class WameedUpdateManager private constructor(private val context: Context) {
             try {
                 if (isManual) delay(800)
                 Log.w(TAG, "▶ Fetching: $UPDATE_JSON_URL")
-                val request = Request.Builder().url(UPDATE_JSON_URL).build()
+                val request = updateRequest(UPDATE_JSON_URL)
                 client.newCall(request).execute().use { response ->
                     Log.w(TAG, "▶ Response code: ${response.code}")
                     if (!response.isSuccessful) {
@@ -125,7 +136,12 @@ class WameedUpdateManager private constructor(private val context: Context) {
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "✗ Exception during update check: ${e.javaClass.simpleName}: ${e.message}", e)
-                crashReporter.logError("Failed to check for GitHub updates", e)
+                crashReporter.recordNonFatal(
+                    category = "update_failed",
+                    message = "check_failed: ${e.javaClass.simpleName}: ${e.message}",
+                    throwable = e,
+                    throttleMs = 120_000L
+                )
                 if (isManual) {
                     _updateState.value = UpdateState.Failed(-1)
                     delay(3000)
@@ -159,7 +175,7 @@ class WameedUpdateManager private constructor(private val context: Context) {
                 // حذف ملف قديم إن وجد
                 if (apkFile.exists()) apkFile.delete()
 
-                val request = Request.Builder().url(url).build()
+                val request = updateRequest(url)
                 client.newCall(request).execute().use { response ->
                     if (!response.isSuccessful) {
                         Log.e(TAG, "✗ Download failed: HTTP ${response.code}")
@@ -201,6 +217,7 @@ class WameedUpdateManager private constructor(private val context: Context) {
                     }
 
                     Log.w(TAG, "✅ تم تنزيل APK (${apkFile.length() / 1024} KB)")
+                    validateApk(apkFile)
                     _updateState.value = UpdateState.Downloaded
                 }
 
@@ -212,8 +229,26 @@ class WameedUpdateManager private constructor(private val context: Context) {
 
             } catch (e: Exception) {
                 Log.e(TAG, "✗ خطأ أثناء تنزيل التحديث: ${e.message}", e)
-                crashReporter.logError("Update download failed", e)
+                crashReporter.recordNonFatal(
+                    category = "update_failed",
+                    message = "download_failed: ${e.javaClass.simpleName}: ${e.message}",
+                    throwable = e,
+                    throttleMs = 120_000L
+                )
                 _updateState.value = UpdateState.Failed(-1)
+            }
+        }
+    }
+
+    private fun validateApk(apkFile: File) {
+        if (!apkFile.exists() || apkFile.length() < 1024 * 1024) {
+            throw IOException("Downloaded APK is missing or unexpectedly small: ${apkFile.length()} bytes")
+        }
+
+        FileInputStream(apkFile).use { input ->
+            val header = ByteArray(2)
+            if (input.read(header) != 2 || header[0] != 'P'.code.toByte() || header[1] != 'K'.code.toByte()) {
+                throw IOException("Downloaded file is not a valid APK/ZIP payload")
             }
         }
     }
@@ -240,7 +275,12 @@ class WameedUpdateManager private constructor(private val context: Context) {
             _updateState.value = UpdateState.Idle
         } catch (e: Exception) {
             Log.e(TAG, "✗ فشل فتح التثبيت: ${e.message}", e)
-            crashReporter.logError("APK install intent failed", e)
+            crashReporter.recordNonFatal(
+                category = "update_failed",
+                message = "install_intent_failed: ${e.javaClass.simpleName}: ${e.message}",
+                throwable = e,
+                throttleMs = 120_000L
+            )
             _updateState.value = UpdateState.Failed(-3)
         }
     }
@@ -281,4 +321,3 @@ sealed class UpdateState {
     object Installed : UpdateState()
     data class Failed(val errorCode: Int) : UpdateState()
 }
-

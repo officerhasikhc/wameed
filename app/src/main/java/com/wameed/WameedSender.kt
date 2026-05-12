@@ -121,7 +121,7 @@ class WameedSender(private val context: Context) {
 
                     override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
                         Log.w("WameedSender", "⚡ Persistent WS فشل: ${t.message}")
-                        WameedLogger.e("WameedSender", "Persistent WS فشل: ${t.message}")
+                        WameedLogger.e("WameedSender", "Persistent WS فشل: ${t.javaClass.simpleName} — ${t.message}", t)
                         synchronized(persistentLock) {
                             persistentWs = null
                             persistentPaired = false
@@ -224,7 +224,7 @@ class WameedSender(private val context: Context) {
                     val idle = System.currentTimeMillis() - lastProgressMs.get()
                     if (idle > pairingTimeoutMs) {
                         if (finishedFlag.compareAndSet(false, true)) {
-                            Log.e(TAG, "انتهت مهلة الاقتران (Timeout) لـ $ip")
+                            WameedLogger.e(TAG, "انتهت مهلة الاقتران (Timeout) لـ $ip")
                             callback.onError(context.getString(R.string.error_pairing_timeout))
                         }
                         break
@@ -284,7 +284,7 @@ class WameedSender(private val context: Context) {
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                WameedLogger.e(TAG, "فشل WebSocket ($ip): ${t.javaClass.simpleName} — ${t.message}")
+                WameedLogger.e(TAG, "فشل WebSocket ($ip): ${t.javaClass.simpleName} — ${t.message}", t)
                 if (finishedFlag.compareAndSet(false, true)) {
                     val msg = when {
                         t is java.net.ConnectException -> context.getString(R.string.error_connect_failed)
@@ -356,7 +356,7 @@ class WameedSender(private val context: Context) {
                         val idle = System.currentTimeMillis() - lastProgressMs.get()
                         if (idle > 120_000L) {
                             if (finishedFlag.compareAndSet(false, true)) {
-                                Log.e(TAG, "Global batch watchdog fired - no response for 2 minutes")
+                                WameedLogger.e(TAG, "Global batch watchdog fired - no response for 2 minutes")
                                 callback.onError(context.getString(R.string.error_timeout_pc_no_response))
                                 currentWebSocket?.close(1000, null)
                             }
@@ -394,7 +394,7 @@ class WameedSender(private val context: Context) {
                 }
 
                 override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                    Log.e(TAG, "خطأ في WebSocket للإرسال: ${t.message}", t)
+                    WameedLogger.e(TAG, "خطأ في WebSocket للإرسال: ${t.javaClass.simpleName} — ${t.message}", t)
                     if (allDataSentFlag.get()) {
                         // جميع البيانات أُرسلت — لا نعتبر الانقطاع فشلاً (Broken Pipe أثناء ACK)
                         Log.w(TAG, "⚠️ انقطاع WebSocket بعد إرسال جميع البيانات (${t.javaClass.simpleName})")
@@ -436,14 +436,14 @@ class WameedSender(private val context: Context) {
                             return@Thread
                         }
                         "ws_failure" -> {
-                            Log.e(TAG, "فشل الاتصال أثناء انتظار الاقتران")
+                            WameedLogger.e(TAG, "فشل الاتصال أثناء انتظار الاقتران")
                             return@Thread
                         }
                     }
                 }
                 
                 if (!paired) {
-                    Log.e(TAG, "فشل الاتصال: لم يكتمل الاقتران")
+                    WameedLogger.e(TAG, "فشل الاتصال: لم يكتمل الاقتران")
                     if (finishedFlag.compareAndSet(false, true)) {
                         callback.onError(context.getString(R.string.error_timeout_pc_no_response))
                         currentWebSocket.close(1000, null)
@@ -493,7 +493,7 @@ class WameedSender(private val context: Context) {
                             }
                             Log.d(TAG, "تم نسخ الملف للمخزن المؤقت، الحجم: $fileSize بايت")
                         } catch (e: Exception) {
-                            Log.e(TAG, "فشل قراءة الملف: ${e.message}")
+                            WameedLogger.e(TAG, "فشل قراءة الملف: ${e.message}", e)
                             callback.onError(context.getString(R.string.error_read_failed, e.message ?: ""))
                             finishedFlag.set(true)
                             break
@@ -501,7 +501,7 @@ class WameedSender(private val context: Context) {
                     }
 
                     if (fileSize <= 0) {
-                        Log.e(TAG, "خطأ: حجم الملف $filename لا يزال غير معروف")
+                        WameedLogger.e(TAG, "خطأ: حجم الملف $filename لا يزال غير معروف")
                         callback.onError(context.getString(R.string.error_unknown_size))
                         finishedFlag.set(true)
                         break
@@ -574,7 +574,7 @@ class WameedSender(private val context: Context) {
                             allDataSentFlag.set(true)
                         }
                     } catch (e: Exception) {
-                        Log.e(TAG, "فشل أثناء إرسال بيانات الملف: ${e.message}")
+                        WameedLogger.e(TAG, "فشل أثناء إرسال بيانات الملف: ${e.message}", e)
                         callback.onError(context.getString(R.string.error_send_failed, e.message ?: ""))
                         finishedFlag.set(true)
                     } finally {
@@ -613,7 +613,7 @@ class WameedSender(private val context: Context) {
                             callback.onInfo(context.getString(R.string.status_saving_on_pc))
                             bumpWatchdog() // Reset watchdog because we know it's working
                         } else if (status == "error") {
-                            Log.e(TAG, "❌ فشل حفظ الملف على الكمبيوتر: ${resp.optString("message")}")
+                            WameedLogger.e(TAG, "❌ فشل حفظ الملف على الكمبيوتر: ${resp.optString("message")}")
                             callback.onError(resp.optString("message", context.getString(R.string.error_save_failed)))
                             finishedFlag.set(true)
                             break
@@ -631,7 +631,7 @@ class WameedSender(private val context: Context) {
                     }
 
                     if (!ackReceived && !finishedFlag.get()) {
-                        Log.e(TAG, "فشل: انتهت مهلة تأكيد الحفظ للملف $filename")
+                        WameedLogger.e(TAG, "فشل: انتهت مهلة تأكيد الحفظ للملف $filename")
                         callback.onError(context.getString(R.string.error_timeout_pc_no_response))
                         finishedFlag.set(true)
                         break
@@ -645,7 +645,7 @@ class WameedSender(private val context: Context) {
                 }
 
             } catch (e: Exception) {
-                Log.e(TAG, "❌ خطأ غير متوقع في Batch Sender", e)
+                WameedLogger.e(TAG, "❌ خطأ غير متوقع في Batch Sender: ${e.message}", e)
                 if (finishedFlag.compareAndSet(false, true)) {
                     callback.onError(context.getString(R.string.error_general, e.message ?: ""))
                 }

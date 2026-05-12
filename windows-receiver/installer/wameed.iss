@@ -5,7 +5,7 @@
 
 #define AppName        "Wameed"
 #define AppNameAr      "وميض"
-#define AppVersion     "1.8.9"
+#include "version.iss"
 #define AppPublisher   "Wameed Project"
 #define AppExe         "Wameed.exe"
 #define AppURL         "https://github.com/"
@@ -30,6 +30,7 @@ PrivilegesRequired=admin
 ArchitecturesInstallIn64BitMode=x64
 CloseApplications=yes
 RestartApplications=no
+CloseApplicationsFilter={#AppExe}
 ; Bilingual-friendly wizard
 ShowLanguageDialog=auto
 

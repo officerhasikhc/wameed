@@ -57,11 +57,11 @@ object WameedLogger {
 
     fun d(tag: String, msg: String) = log(Level.DEBUG, tag, msg)
     fun i(tag: String, msg: String) = log(Level.INFO, tag, msg)
-    fun w(tag: String, msg: String) = log(Level.WARN, tag, msg)
-    fun e(tag: String, msg: String) = log(Level.ERROR, tag, msg)
+    fun w(tag: String, msg: String, throwable: Throwable? = null) = log(Level.WARN, tag, msg, throwable)
+    fun e(tag: String, msg: String, throwable: Throwable? = null) = log(Level.ERROR, tag, msg, throwable)
     fun net(tag: String, msg: String) = log(Level.NET, tag, msg)
 
-    private fun log(level: Level, tag: String, msg: String) {
+    private fun log(level: Level, tag: String, msg: String, throwable: Throwable? = null) {
         val entry = LogEntry(System.currentTimeMillis(), level, tag, msg)
 
         // Add to ring buffer
@@ -85,8 +85,8 @@ object WameedLogger {
         when (level) {
             Level.DEBUG -> Log.d(tag, msg)
             Level.INFO -> Log.i(tag, msg)
-            Level.WARN -> Log.w(tag, msg)
-            Level.ERROR -> Log.e(tag, msg)
+            Level.WARN -> if (throwable != null) Log.w(tag, msg, throwable) else Log.w(tag, msg)
+            Level.ERROR -> if (throwable != null) Log.e(tag, msg, throwable) else Log.e(tag, msg)
             Level.NET -> Log.d(tag, "[NET] $msg")
         }
 
@@ -94,7 +94,7 @@ object WameedLogger {
         // local logging must keep working even if Firebase is unavailable.
         try {
             if (WameedCrashReporter.isInitialized()) {
-                WameedCrashReporter.getInstance().recordLogEntry(level.name, tag, msg)
+                WameedCrashReporter.getInstance().recordLogEntry(level.name, tag, msg, throwable)
             }
         } catch (ex: Exception) {
             Log.w(TAG, "Failed to forward log to Crashlytics: ${ex.message}")

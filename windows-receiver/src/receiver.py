@@ -29,12 +29,31 @@ import websockets
 from websockets.server import serve
 import subprocess
 
+try:
+    import sentry_sdk
+except ImportError:
+    sentry_sdk = None
+
+try:
+    from wameed_version import (
+        VERSION_NAME,
+        VERSION_CODE,
+        RELEASE_TAG,
+        UPDATE_JSON_URL,
+        SENTRY_DSN,
+    )
+except Exception:
+    VERSION_NAME = "0.0.0"
+    VERSION_CODE = 0
+    RELEASE_TAG = "local"
+    UPDATE_JSON_URL = "https://raw.githubusercontent.com/officerhasikhc/wameed/main/update.json"
+    SENTRY_DSN = ""
+
 # ======================== Configuration ========================
-VERSION = "1.8.6"
+VERSION = VERSION_NAME
 APP_NAME = "وميض (Wameed)"
 PORT_WS = 7788
 PORT_UDP = 7789
-UPDATE_JSON_URL = "https://raw.githubusercontent.com/officerhasikhc/wameed/main/update.json"
 
 # ======================== Font Configuration ========================
 # خط عربي احترافي مع fallback
@@ -341,6 +360,88 @@ except Exception as e:
 _sh = logging.StreamHandler(sys.stdout)
 _sh.setFormatter(_fmt)
 logger.addHandler(_sh)
+
+# ======================== Remote Diagnostics ========================
+def _sanitize_for_telemetry(value):
+    """Remove user-specific paths and full private IPs before remote reporting."""
+    import re
+    text = str(value)
+    text = re.sub(r"\b(\d{1,3}\.\d{1,3}\.\d{1,3})\.\d{1,3}\b", r"\1.x", text)
+    text = re.sub(r"([A-Za-z]:\\Users\\)[^\\\r\n]+", r"\1<user>", text)
+    text = re.sub(r"(/home/)[^/\r\n]+", r"\1<user>", text)
+    return text[:900]
+
+def _sanitize_event(obj):
+    if isinstance(obj, dict):
+        return {k: _sanitize_event(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_sanitize_event(v) for v in obj]
+    if isinstance(obj, str):
+        return _sanitize_for_telemetry(obj)
+    return obj
+
+def _sentry_before_send(event, hint):
+    return _sanitize_event(event)
+
+def init_sentry():
+    dsn = os.environ.get("WAMEED_SENTRY_DSN") or SENTRY_DSN
+    if not dsn:
+        logger.info("Sentry disabled: no WAMEED_SENTRY_DSN/version.properties sentryDsn configured")
+        return False
+    if sentry_sdk is None:
+        logger.warning("Sentry disabled: sentry-sdk is not installed")
+        return False
+
+    try:
+        sample_rate = float(os.environ.get("WAMEED_SENTRY_TRACES_SAMPLE_RATE", "0.05"))
+    except ValueError:
+        sample_rate = 0.05
+
+    try:
+        sentry_sdk.init(
+            dsn=dsn,
+            release=f"wameed-windows@{VERSION}",
+            environment=os.environ.get("WAMEED_ENV", "production"),
+            traces_sample_rate=sample_rate,
+            before_send=_sentry_before_send,
+        )
+        sentry_sdk.set_tag("app", "wameed-windows")
+        sentry_sdk.set_tag("version", VERSION)
+        sentry_sdk.set_tag("version_code", str(VERSION_CODE))
+        sentry_sdk.set_tag("release_tag", RELEASE_TAG)
+        sentry_sdk.set_tag("platform", "windows")
+        logger.info("Sentry initialized for Windows diagnostics")
+        return True
+    except Exception as exc:
+        logger.warning(f"Sentry initialization failed: {exc}")
+        return False
+
+SENTRY_ENABLED = init_sentry()
+
+def report_windows_issue(category, exc=None, level="error", **context):
+    safe_context = {str(k): _sanitize_for_telemetry(v) for k, v in context.items()}
+    if exc is not None:
+        logger.debug(f"Telemetry issue {category}: {type(exc).__name__}: {_sanitize_for_telemetry(exc)}")
+    else:
+        logger.debug(f"Telemetry issue {category}: {safe_context}")
+
+    if not SENTRY_ENABLED or sentry_sdk is None:
+        return
+
+    try:
+        with sentry_sdk.push_scope() as scope:
+            scope.set_tag("wameed.category", category)
+            scope.set_tag("wameed.level", level)
+            for key, value in safe_context.items():
+                if len(value) <= 120:
+                    scope.set_tag(f"wameed.{key}", value)
+            scope.set_context("wameed", safe_context)
+            if exc is not None:
+                sentry_sdk.capture_exception(exc)
+            else:
+                sentry_sdk.capture_message(category, level=level)
+    except Exception as telemetry_exc:
+        logger.debug(f"Sentry capture failed: {telemetry_exc}")
 
 # ======================== Utils ========================
 def get_resource_path(relative_path):
@@ -1669,7 +1770,11 @@ class WameedApp:
                     response = requests.get(
                         UPDATE_JSON_URL,
                         timeout=15,
-                        headers={"User-Agent": f"Wameed-Windows/{VERSION}"}
+                        headers={
+                            "User-Agent": f"Wameed-Windows/{VERSION}",
+                            "Cache-Control": "no-cache",
+                            "Pragma": "no-cache",
+                        }
                     )
                     response.raise_for_status()
                     manifest = response.json()
@@ -1686,6 +1791,7 @@ class WameedApp:
                     post(lambda: show_result(update_info))
                 except Exception as exc:
                     logger.exception("Windows update check failed")
+                    report_windows_issue("update_check_failed", exc, url=UPDATE_JSON_URL)
                     post(lambda error=exc: show_error(error))
 
             threading.Thread(target=worker, daemon=True).start()
@@ -1760,7 +1866,11 @@ class WameedApp:
                     update_url,
                     stream=True,
                     timeout=(15, 300),
-                    headers={"User-Agent": f"Wameed-Windows/{VERSION}"}
+                    headers={
+                        "User-Agent": f"Wameed-Windows/{VERSION}",
+                        "Cache-Control": "no-cache",
+                        "Pragma": "no-cache",
+                    }
                 ) as response:
                     response.raise_for_status()
                     total = int(response.headers.get("content-length") or 0)
@@ -1797,9 +1907,21 @@ class WameedApp:
 
                 if downloaded <= 0:
                     raise IOError("Downloaded installer is empty")
+                if downloaded < 1024 * 1024:
+                    raise IOError(f"Downloaded installer is unexpectedly small: {downloaded} bytes")
+                with open(installer_path, "rb") as downloaded_installer:
+                    if downloaded_installer.read(2) != b"MZ":
+                        raise IOError("Downloaded file is not a Windows executable")
+                logger.info(f"Windows update downloaded and validated: {installer_path} ({downloaded} bytes)")
                 post(lambda path=installer_path: show_ready(path))
             except Exception as exc:
                 logger.exception("Windows update download failed")
+                report_windows_issue(
+                    "update_download_failed",
+                    exc,
+                    url=info.get("updateUrl", ""),
+                    remote_version=info.get("version", ""),
+                )
                 post(lambda error=exc: show_error(error))
 
         threading.Thread(target=worker, daemon=True).start()
@@ -1838,7 +1960,7 @@ if (($CurrentExe.ToLower().EndsWith('.exe')) -and (Test-Path $CurrentExe)) {{
                 ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script_path],
                 creationflags=flags
             )
-            logger.info(f"Windows update installer launched: {installer_path}")
+            logger.info(f"Windows update installer launched: {installer_path}; script={script_path}")
             try:
                 if dialog and dialog.winfo_exists():
                     dialog.destroy()
@@ -1847,6 +1969,7 @@ if (($CurrentExe.ToLower().EndsWith('.exe')) -and (Test-Path $CurrentExe)) {{
             self.quit_app()
         except Exception as exc:
             logger.exception("Failed to launch update installer")
+            report_windows_issue("update_install_launch_failed", exc, installer=installer_path)
             messagebox.showerror(t("update_failed"), str(exc), parent=dialog)
 
     def _open_log_file(self):
@@ -2134,6 +2257,7 @@ if (($CurrentExe.ToLower().EndsWith('.exe')) -and (Test-Path $CurrentExe)) {{
             logger.info(f"Firewall fix launched with elevation script: {script_path}")
         except Exception as e:
             logger.error(f"Failed to run firewall fix: {e}")
+            report_windows_issue("firewall_fix_failed", e)
             messagebox.showerror(t("error"), str(e))
 
     def _broadcast_discovery(self, timeout=2.0):
@@ -2248,6 +2372,7 @@ if (($CurrentExe.ToLower().EndsWith('.exe')) -and (Test-Path $CurrentExe)) {{
 
             if not self._verify_device_connection(ip, timeout=2.0):
                 logger.warning(f"⚠️ Preflight failed before sending to {ip}: TCP 7789 is not reachable")
+                report_windows_issue("send_preflight_failed", level="warning", target_ip=ip, target_port=7789)
                 device_info = {
                     "id": connected_device.get("id", "") if connected_device else "",
                     "name": device_name or (connected_device.get("name") if connected_device else ip),
@@ -2608,6 +2733,7 @@ if (($CurrentExe.ToLower().EndsWith('.exe')) -and (Test-Path $CurrentExe)) {{
 
             except Exception as e:
                 logger.error(f"❌ خطأ في إرسال الملفات إلى {ip}: {type(e).__name__}: {e}")
+                report_windows_issue("send_files_failed", e, target_ip=ip, target_port=7789, file_count=len(files))
                 error_msg = str(e)
                 if "121" in error_msg: error_msg = "خطأ في الشبكة (Timeout) - تحقق من اتصال WiFi"
                 elif "1225" in error_msg or "ConnectionRefused" in type(e).__name__: error_msg = "الهاتف رفض الاتصال - تأكد من فتح التطبيق وتفعيل الاستقبال"
@@ -2680,6 +2806,7 @@ if (($CurrentExe.ToLower().EndsWith('.exe')) -and (Test-Path $CurrentExe)) {{
 
             except Exception as e:
                 logger.error(f"خطأ في إرسال النص: {e}")
+                report_windows_issue("send_text_failed", e, target_ip=ip, target_port=7789, text_length=len(text))
                 window.after(0, lambda: self._show_inline_message(window, f"❌ فشل الإرسال: {str(e)[:40]}", "#EF4444"))
 
         asyncio.run(send_text_task())
@@ -3099,6 +3226,7 @@ async def handle_client(websocket, path=None):
 
             except Exception as e:
                 logger.exception("حدث خطأ أثناء معالجة رسالة العميل")
+                report_windows_issue("ws_message_failed", e, client_ip=client_ip, message_type=locals().get("mtype", "unknown"))
     except Exception as e:
         logger.debug(f"انتهى اتصال WebSocket مع ({client_ip}): {e}")
 
@@ -3332,3 +3460,4 @@ if __name__ == "__main__":
         app.run()
     except Exception as e:
         logger.exception("حدث خطأ فادح أدى لتوقف التطبيق")
+        report_windows_issue("fatal_app_error", e)

@@ -3,7 +3,7 @@ REM ============================================================
 REM  Wameed - Build Wameed.exe + Installer (uses wameed.spec)
 REM  Output:
 REM    dist\Wameed.exe
-REM    installer\Output\WameedSetup-1.0.0.exe
+REM    installer\Output\WameedSetup-<version>.exe
 REM ============================================================
 setlocal EnableDelayedExpansion
 set ROOT=%~dp0..
@@ -14,17 +14,30 @@ echo  Wameed - Building exe + installer
 echo =================================================
 
 echo.
-echo [1/4] Installing build dependencies...
+echo [0/5] Syncing version metadata...
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%ROOT%\..\scripts\sync-version.ps1"
+if errorlevel 1 (
+  echo [FAIL] Version sync failed
+  exit /b 1
+)
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%ROOT%\..\scripts\verify-version.ps1"
+if errorlevel 1 (
+  echo [FAIL] Version verification failed
+  exit /b 1
+)
+
+echo.
+echo [1/5] Installing build dependencies...
 pip install -r src\requirements.txt
 pip install "pyinstaller>=6.0"
 
 echo.
-echo [2/4] Cleaning previous build...
+echo [2/5] Cleaning previous build...
 if exist build rmdir /s /q build
 if exist dist  rmdir /s /q dist
 
 echo.
-echo [3/4] Building Wameed.exe via wameed.spec ...
+echo [3/5] Building Wameed.exe via wameed.spec ...
 pyinstaller --noconfirm wameed.spec
 if not exist "dist\Wameed.exe" (
   echo [FAIL] PyInstaller did not produce dist\Wameed.exe
@@ -33,7 +46,7 @@ if not exist "dist\Wameed.exe" (
 echo [OK] dist\Wameed.exe
 
 echo.
-echo [4/4] Compiling Inno Setup installer ...
+echo [4/5] Compiling Inno Setup installer ...
 
 set "ISCC="
 for /f "delims=" %%I in ('where ISCC 2^>nul') do set "ISCC=%%I"
@@ -63,6 +76,12 @@ echo.
 echo [5/5] Cleaning intermediate build artifacts...
 if exist build rmdir /s /q build
 REM We KEEP dist/ folder because package-release.ps1 needs it
+
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%ROOT%\..\scripts\verify-version.ps1"
+if errorlevel 1 (
+  echo [FAIL] Final version verification failed
+  exit /b 1
+)
 
 echo.
 echo =================================================

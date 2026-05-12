@@ -20,6 +20,7 @@ class WameedCrashReporter private constructor() {
     
     private val crashlytics = Firebase.crashlytics
     private val lastRecordedAt = ConcurrentHashMap<String, Long>()
+    private val softSignalCounts = ConcurrentHashMap<String, Int>()
     
     companion object {
         @Volatile
@@ -106,7 +107,7 @@ class WameedCrashReporter private constructor() {
      * يربط WameedLogger بـ Firebase: السطور المهمة تصبح breadcrumbs،
      * والأخطاء/فشل الشبكة تتحول إلى non-fatal throttled حتى لا نغرق Crashlytics.
      */
-    fun recordLogEntry(level: String, tag: String, message: String) {
+    fun recordLogEntry(level: String, tag: String, message: String, throwable: Throwable? = null) {
         val safeMessage = message.take(900)
         crashlytics.log("[$level][$tag] $safeMessage")
         crashlytics.setCustomKey("last_log_level", level)
@@ -114,11 +115,7 @@ class WameedCrashReporter private constructor() {
         crashlytics.setCustomKey("last_log_message", safeMessage.take(180))
 
         when (level) {
-            "ERROR" -> recordNonFatal(
-                category = "app_log_error",
-                message = "$tag: $safeMessage",
-                throttleMs = 60_000L
-            )
+            "ERROR" -> recordClassifiedLogFailure(tag, safeMessage, throwable)
             "WARN" -> logEvent("wameed_warning", Bundle().apply {
                 putString("tag", tag.take(40))
                 putString("message", safeMessage.take(100))
@@ -132,11 +129,59 @@ class WameedCrashReporter private constructor() {
                     recordNonFatal(
                         category = "network_log_failure",
                         message = "$tag: $safeMessage",
+                        throwable = throwable,
                         throttleMs = 90_000L
                     )
                 }
             }
         }
+    }
+
+    private fun recordClassifiedLogFailure(tag: String, message: String, throwable: Throwable?) {
+        val category = classifyFailure(tag, message)
+        val throttleMs = when (category) {
+            "persistent_ws_disconnect" -> 10 * 60_000L
+            "pairing_timeout" -> 2 * 60_000L
+            "firewall_suspected" -> 5 * 60_000L
+            else -> 60_000L
+        }
+
+        if (category == "persistent_ws_disconnect" && !isActiveTransferFailure(message)) {
+            logEvent("persistent_ws_disconnect", Bundle().apply {
+                putString("tag", tag.take(40))
+                putString("throwable", throwable?.javaClass?.simpleName?.take(40) ?: "none")
+            })
+            val countKey = "$category:$tag:${throwable?.javaClass?.name.orEmpty()}:${message.take(80)}"
+            val count = softSignalCounts.merge(countKey, 1) { old, one -> old + one } ?: 1
+            if (count % 3 != 0) return
+        }
+
+        recordNonFatal(
+            category = category,
+            message = "$tag: $message",
+            throwable = throwable,
+            throttleMs = throttleMs
+        )
+    }
+
+    private fun classifyFailure(tag: String, message: String): String {
+        val text = "$tag $message".lowercase(Locale.US)
+        return when {
+            text.contains("pairing") || text.contains("اقتران") -> "pairing_timeout"
+            text.contains("firewall") || text.contains("جدار") || text.contains("محجوب") -> "firewall_suspected"
+            text.contains("update") || text.contains("تحديث") || text.contains("install") -> "update_failed"
+            text.contains("send") || text.contains("إرسال") || text.contains("ارسال") -> "send_failed"
+            text.contains("persistent ws") || text.contains("ws failure") || text.contains("websocket") -> "persistent_ws_disconnect"
+            else -> "app_log_error"
+        }
+    }
+
+    private fun isActiveTransferFailure(message: String): Boolean {
+        return message.contains("send", ignoreCase = true) ||
+            message.contains("إرسال") ||
+            message.contains("ارسال") ||
+            message.contains("file", ignoreCase = true) ||
+            message.contains("ملف")
     }
 
     fun recordNonFatal(
@@ -154,11 +199,13 @@ class WameedCrashReporter private constructor() {
         val safeMessage = message.take(900)
         crashlytics.setCustomKey("last_nonfatal_category", category.take(40))
         crashlytics.setCustomKey("last_nonfatal_message", safeMessage.take(180))
+        crashlytics.setCustomKey("last_nonfatal_throwable", throwable?.javaClass?.simpleName?.take(80) ?: "none")
         crashlytics.log("NON_FATAL[$category]: $safeMessage")
 
         logEvent("wameed_nonfatal", Bundle().apply {
             putString("category", category.take(40))
             putString("message", safeMessage.take(100))
+            putString("throwable", throwable?.javaClass?.simpleName?.take(40) ?: "none")
         })
 
         crashlytics.recordException(

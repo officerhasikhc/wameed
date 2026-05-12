@@ -10,9 +10,29 @@ $ErrorActionPreference = "Stop"
 $root = $PSScriptRoot
 Set-Location $root
 
-# Single source of truth for release version. Must match `AppVersion` in
-# windows-receiver\installer\wameed.iss — if you bump one, bump the other.
-$version = "1.8.9"
+function Read-VersionProperties {
+    param([string]$Path)
+    $props = @{}
+    foreach ($rawLine in Get-Content -LiteralPath $Path -Encoding UTF8) {
+        $line = $rawLine.Trim()
+        if (-not $line -or $line.StartsWith("#")) { continue }
+        $idx = $line.IndexOf("=")
+        if ($idx -lt 1) { continue }
+        $props[$line.Substring(0, $idx).Trim()] = $line.Substring($idx + 1).Trim()
+    }
+    return $props
+}
+
+# Single source of truth for Android, Windows, installer, and update.json.
+$versionProps = Read-VersionProperties "$root\version.properties"
+$version = [string]$versionProps["versionName"]
+if ([string]::IsNullOrWhiteSpace($version)) {
+    throw "version.properties is missing versionName"
+}
+
+Write-Host "[pre] مزامنة ملفات الإصدار والتحقق منها..." -ForegroundColor Yellow
+& "$root\scripts\sync-version.ps1"
+& "$root\scripts\verify-version.ps1"
 
 Write-Host ""
 Write-Host "┌─────────────────────────────────────────────────┐" -ForegroundColor Cyan
@@ -52,6 +72,8 @@ Copy-Item "$root\windows-receiver\installer\Output\WameedSetup-$version.exe" "$r
 Copy-Item "$root\app\build\outputs\apk\release\app-release.apk" "$root\release\Wameed-Android.apk"
 Copy-Item "$root\INSTALL-للصديق.txt" "$root\release\" -ErrorAction SilentlyContinue
 Write-Host "      ✓ تم نسخ المثبّت + APK + التعليمات" -ForegroundColor Green
+
+& "$root\scripts\verify-version.ps1"
 
 # ─── ملخص ─────────────────────────────────────────────────────────
 Write-Host ""

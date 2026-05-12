@@ -429,7 +429,7 @@ class WameedConnectionService : Service() {
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
                 Log.w(TAG, "WS failure: ${t.message}")
-                WameedLogger.e(TAG, "WS failure: ${t.javaClass.simpleName} — ${t.message}")
+                WameedLogger.e(TAG, "WS failure: ${t.javaClass.simpleName} — ${t.message}", t)
                 ws = null
                 pingFailures++
                 // Debounce: delay ServiceStatus(false) by 3s to avoid UI flicker

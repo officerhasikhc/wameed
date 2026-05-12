@@ -16,6 +16,13 @@ if (keystorePropertiesFile.exists()) {
     keystoreProperties.load(FileInputStream(keystorePropertiesFile))
 }
 
+val versionPropsFile = rootProject.file("version.properties")
+val versionProps = Properties().apply {
+    load(FileInputStream(versionPropsFile))
+}
+val wameedVersionCode = versionProps["versionCode"].toString().toInt()
+val wameedVersionName = versionProps["versionName"].toString()
+
 android {
     namespace = "com.wameed"
     compileSdk = 37
@@ -24,8 +31,8 @@ android {
         applicationId = "com.wameed"
         minSdk = 26
         targetSdk = 36
-        versionCode = 19
-        versionName = "1.8.9"
+        versionCode = wameedVersionCode
+        versionName = wameedVersionName
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
