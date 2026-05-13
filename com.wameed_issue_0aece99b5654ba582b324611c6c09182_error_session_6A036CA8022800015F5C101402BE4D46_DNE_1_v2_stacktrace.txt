@@ -1,0 +1,25 @@
+# Crashlytics - Stack trace
+# Application: com.wameed
+# Platform: android
+# Version: 2.0.0 (20)
+# Issue: 0aece99b5654ba582b324611c6c09182
+# Session: 6A036CA8022800015F5C101402BE4D46_DNE_1_v2
+# Date: Tue May 12 2026 22:26:43 GMT+0400 (Gulf Standard Time)
+
+Non-fatal Exception: java.net.SocketException: Broken pipe
+       at java.net.SocketOutputStream.socketWrite0(SocketOutputStream.java)
+       at java.net.SocketOutputStream.socketWrite(SocketOutputStream.java:116)
+       at java.net.SocketOutputStream.write(SocketOutputStream.java:156)
+       at okio.OutputStreamSink.write(JvmOkio.kt:56)
+       at okio.AsyncTimeout$sink$1.write(AsyncTimeout.kt:102)
+       at okio.RealBufferedSink.flush(RealBufferedSink.kt:268)
+       at okhttp3.internal.ws.WebSocketWriter.writeControlFrame(WebSocketWriter.kt:142)
+       at okhttp3.internal.ws.WebSocketWriter.writePing(WebSocketWriter.kt:69)
+       at okhttp3.internal.ws.RealWebSocket.writePingFrame$okhttp(RealWebSocket.kt:569)
+       at okhttp3.internal.ws.RealWebSocket$initReaderAndWriter$lambda$3$$inlined$schedule$1.runOnce(TaskQueue.kt:219)
+       at okhttp3.internal.concurrent.TaskRunner.runTask(TaskRunner.kt:116)
+       at okhttp3.internal.concurrent.TaskRunner.access$runTask(TaskRunner.kt:42)
+       at okhttp3.internal.concurrent.TaskRunner$runnable$1.run(TaskRunner.kt:65)
+       at java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1154)
+       at java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:652)
+       at java.lang.Thread.run(Thread.java:1564)

@@ -9,6 +9,8 @@ import webbrowser
 import asyncio
 import threading
 import time
+import shutil
+import hashlib
 from datetime import datetime
 from urllib.parse import urlparse
 import tkinter as tk
@@ -426,7 +428,7 @@ def report_windows_issue(category, exc=None, level="error", **context):
         logger.debug(f"Telemetry issue {category}: {safe_context}")
 
     if not SENTRY_ENABLED or sentry_sdk is None:
-        return
+        return None
 
     try:
         with sentry_sdk.push_scope() as scope:
@@ -437,11 +439,96 @@ def report_windows_issue(category, exc=None, level="error", **context):
                     scope.set_tag(f"wameed.{key}", value)
             scope.set_context("wameed", safe_context)
             if exc is not None:
-                sentry_sdk.capture_exception(exc)
+                return sentry_sdk.capture_exception(exc)
             else:
-                sentry_sdk.capture_message(category, level=level)
+                return sentry_sdk.capture_message(category, level=level)
     except Exception as telemetry_exc:
         logger.debug(f"Sentry capture failed: {telemetry_exc}")
+    return None
+
+def show_error_report_dialog(category, exc, event_id=None, parent=None):
+    """Show a compact user-facing report notice after serious failures."""
+    try:
+        sentry_line = (
+            f"تم إرسال التقرير إلى Sentry.\nEvent ID: {event_id}"
+            if event_id else
+            "تم حفظ التفاصيل في سجل التشخيص المحلي. لم يتم إرسالها لأن Sentry غير مهيأ."
+        )
+        message = (
+            f"حدث خطأ في وميض.\n\n"
+            f"النوع: {type(exc).__name__}\n"
+            f"القسم: {category}\n\n"
+            f"{sentry_line}\n\n"
+            f"هل تريد فتح مجلد السجل المحلي؟"
+        )
+        if messagebox.askyesno("وميض - تقرير خطأ", message, parent=parent):
+            os.startfile(LOCAL_LOG_DIR)
+    except Exception:
+        pass
+
+def install_global_exception_hooks():
+    """Capture unhandled Windows errors even when they happen outside app.run()."""
+    previous_sys_hook = sys.excepthook
+    previous_thread_hook = getattr(threading, "excepthook", None)
+
+    def sys_hook(exc_type, exc, tb):
+        logger.exception("Unhandled Python exception", exc_info=(exc_type, exc, tb))
+        event_id = report_windows_issue("unhandled_app_error", exc)
+        show_error_report_dialog("unhandled_app_error", exc, event_id=event_id)
+        if previous_sys_hook:
+            previous_sys_hook(exc_type, exc, tb)
+
+    def thread_hook(args):
+        logger.exception(
+            "Unhandled thread exception",
+            exc_info=(args.exc_type, args.exc_value, args.exc_traceback)
+        )
+        report_windows_issue(
+            "unhandled_thread_error",
+            args.exc_value,
+            thread=getattr(args.thread, "name", "unknown")
+        )
+        if previous_thread_hook:
+            previous_thread_hook(args)
+
+    sys.excepthook = sys_hook
+    if previous_thread_hook:
+        threading.excepthook = thread_hook
+
+TRANSFER_PROTOCOL_VERSION = 2
+TRANSFER_CHUNK_SIZE = 512 * 1024
+TRANSFER_MAX_FRAME_SIZE = 8 * 1024 * 1024
+
+def _safe_filename(filename):
+    name = os.path.basename(str(filename or "received_file")).strip()
+    return name or "received_file"
+
+def _ensure_unique_path(path):
+    if not os.path.exists(path):
+        return path
+    base, ext = os.path.splitext(path)
+    counter = 1
+    while True:
+        candidate = f"{base}_{counter}{ext}"
+        if not os.path.exists(candidate):
+            return candidate
+        counter += 1
+
+def _transfer_id_for_file(path, size):
+    raw = f"{os.path.basename(path).lower()}:{int(size)}".encode("utf-8", errors="ignore")
+    return "w2a-" + hashlib.sha256(raw).hexdigest()[:20]
+
+def _ack_timeout_for_size(size_bytes):
+    # Finalization on mobile storage can be slow; keep this bounded but size-aware.
+    return max(180, min(3600, int(size_bytes / (2 * 1024 * 1024)) + 120))
+
+async def _send_transfer_status(websocket, status, **fields):
+    payload = {
+        "status": status,
+        "protocol_version": TRANSFER_PROTOCOL_VERSION,
+        **fields,
+    }
+    await websocket.send(json.dumps(payload))
 
 # ======================== Utils ========================
 def get_resource_path(relative_path):
@@ -1969,7 +2056,8 @@ if (($CurrentExe.ToLower().EndsWith('.exe')) -and (Test-Path $CurrentExe)) {{
             self.quit_app()
         except Exception as exc:
             logger.exception("Failed to launch update installer")
-            report_windows_issue("update_install_launch_failed", exc, installer=installer_path)
+            event_id = report_windows_issue("update_install_launch_failed", exc, installer=installer_path)
+            show_error_report_dialog("update_install_launch_failed", exc, event_id=event_id, parent=dialog)
             messagebox.showerror(t("update_failed"), str(exc), parent=dialog)
 
     def _open_log_file(self):
@@ -2641,10 +2729,24 @@ if (($CurrentExe.ToLower().EndsWith('.exe')) -and (Test-Path $CurrentExe)) {{
                 for attempt in range(max_retries):
                     try:
                         uri = f"ws://{ip}:7789"
-                        # ملاحظة: تم تغيير connect_timeout إلى open_timeout لتوافق مكتبة websockets
-                        async with websockets.connect(uri, open_timeout=15, ping_interval=5, ping_timeout=10) as ws:
+                        # File transfers carry their own progress acknowledgements; websocket pings
+                        # are disabled here to avoid Broken Pipe during heavy binary streaming.
+                        async with websockets.connect(
+                            uri,
+                            open_timeout=15,
+                            ping_interval=None,
+                            ping_timeout=None,
+                            max_size=TRANSFER_MAX_FRAME_SIZE,
+                            max_queue=8,
+                        ) as ws:
                             # Hello
-                            await ws.send(json.dumps({"type":"hello", "device":socket.gethostname(), "device_id":"pc_client", "app_version":VERSION}))
+                            await ws.send(json.dumps({
+                                "type": "hello",
+                                "device": socket.gethostname(),
+                                "device_id": "pc_client",
+                                "app_version": VERSION,
+                                "protocol_version": TRANSFER_PROTOCOL_VERSION,
+                            }))
 
                             # استلام الرد مع مهلة زمنية
                             resp_raw = await asyncio.wait_for(ws.recv(), timeout=15)
@@ -2664,40 +2766,88 @@ if (($CurrentExe.ToLower().EndsWith('.exe')) -and (Test-Path $CurrentExe)) {{
 
                                 window.after(0, lambda i=idx, n=fname: self.progress_label.config(text=t("sending_file").format(idx=i+1, total=total_files, name=n)))
 
-                                # تقليل حجم الـ Chunk إلى 512KB لتفادي خطأ Semaphore timeout (WinError 121)
-                                chunk_size = 512 * 1024
+                                chunk_size = TRANSFER_CHUNK_SIZE
                                 total_chunks = (fsize + chunk_size - 1) // chunk_size
+                                transfer_id = _transfer_id_for_file(path, fsize)
 
-                                await ws.send(json.dumps({"type":"file_meta", "filename":fname, "size":fsize, "chunks":total_chunks}))
+                                await ws.send(json.dumps({
+                                    "type": "file_meta",
+                                    "protocol_version": TRANSFER_PROTOCOL_VERSION,
+                                    "transfer_id": transfer_id,
+                                    "direction": "windows_to_android",
+                                    "filename": fname,
+                                    "size": fsize,
+                                    "chunks": total_chunks,
+                                    "chunk_size": chunk_size,
+                                }))
 
-                                sent = 0
+                                resume_offset = 0
+                                pending_status = None
+                                try:
+                                    ready_raw = await asyncio.wait_for(ws.recv(), timeout=5)
+                                    ready = json.loads(ready_raw)
+                                    if ready.get("status") == "ready":
+                                        resume_offset = max(0, min(int(ready.get("offset", 0)), fsize))
+                                        logger.info(f"الهاتف جاهز لاستقبال {fname}; resume_offset={resume_offset}")
+                                    elif ready.get("status") == "error":
+                                        raise Exception(ready.get("message", "رفض الهاتف استقبال الملف"))
+                                    else:
+                                        pending_status = ready
+                                except asyncio.TimeoutError:
+                                    logger.info("لم يصل ready من الهاتف؛ المتابعة بتوافق البروتوكول القديم")
+
+                                sent = resume_offset
                                 with open(path, "rb") as f:
-                                    for _ in range(total_chunks):
+                                    if resume_offset:
+                                        f.seek(resume_offset)
+                                    while sent < fsize:
                                         chunk = f.read(chunk_size)
+                                        if not chunk:
+                                            break
                                         await ws.send(chunk)
                                         sent += len(chunk)
-                                        pct = (sent / fsize) * 100
+                                        pct = (sent / fsize) * 100 if fsize else 100
                                         window.after(0, lambda p=pct: self.progress_var.set(p))
+                                        if sent % (16 * 1024 * 1024) < chunk_size:
+                                            await asyncio.sleep(0)
 
-                                # استلام تأكيد الحفظ لكل ملف مع مهلة زمنية ذكية لتجنب التجمد
-                                try:
-                                    while True:
-                                        # Use a longer timeout (120s) as the Android watchdog is 2 mins,
-                                        # but "saving" status will reset the wait in each iteration.
-                                        final_resp_raw = await asyncio.wait_for(ws.recv(), timeout=120)
-                                        final_resp = json.loads(final_resp_raw)
+                                ack_timeout = _ack_timeout_for_size(fsize)
+                                ack_started = time.time()
+                                last_status = time.time()
+                                saved = False
+                                final_resp = pending_status
 
-                                        if final_resp.get("status") == "saving":
-                                            logger.info(f"الهاتف يقوم بحفظ الملف {fname}...")
-                                            window.after(0, lambda n=fname: self.progress_label.config(text=t("saving_file").format(name=n)))
+                                while time.time() - ack_started < ack_timeout:
+                                    if final_resp is None:
+                                        try:
+                                            final_resp_raw = await asyncio.wait_for(ws.recv(), timeout=30)
+                                            final_resp = json.loads(final_resp_raw)
+                                        except asyncio.TimeoutError:
+                                            if time.time() - last_status > min(180, ack_timeout):
+                                                raise TimeoutError(f"Timeout waiting for save ACK for {fname}")
                                             continue
 
-                                        if final_resp.get("status") == "saved": break
-                                        if final_resp.get("status") == "error":
-                                            raise Exception(final_resp.get("message", "خطأ غير معروف في الهاتف"))
-                                except asyncio.TimeoutError:
-                                    logger.warning(f"Timeout waiting for 'saved' status for {fname}")
-                                    # نواصل الإرسال للملف التالي رغم التايم آوت لضمان عدم توقف العملية بالكامل
+                                    status = final_resp.get("status")
+                                    if status == "progress":
+                                        received = int(final_resp.get("received_bytes", final_resp.get("received", sent)) or 0)
+                                        if fsize:
+                                            pct = min(100, (received / fsize) * 100)
+                                            window.after(0, lambda p=pct: self.progress_var.set(p))
+                                        last_status = time.time()
+                                    elif status == "saving":
+                                        logger.info(f"الهاتف يقوم بحفظ الملف {fname}...")
+                                        window.after(0, lambda n=fname: self.progress_label.config(text=t("saving_file").format(name=n)))
+                                        last_status = time.time()
+                                    elif status == "saved":
+                                        saved = True
+                                        break
+                                    elif status == "error":
+                                        raise Exception(final_resp.get("message", "خطأ غير معروف في الهاتف"))
+
+                                    final_resp = None
+
+                                if not saved:
+                                    raise TimeoutError(f"Timeout waiting for 'saved' status for {fname}")
 
                                 elapsed = time.time() - start_time
                                 logger.info(f"تم إرسال {fname} بنجاح")
@@ -3180,30 +3330,122 @@ async def handle_client(websocket, path=None):
                     if state["auto_open"]: webbrowser.open(url)
 
                 elif mtype == "file_meta":
-                    filename = data.get("filename")
-                    chunks = data.get("chunks")
-                    fsize = data.get("size", 0)
+                    filename = _safe_filename(data.get("filename"))
+                    chunks = int(data.get("chunks") or 0)
+                    fsize = int(data.get("size", 0) or 0)
+                    transfer_id = str(data.get("transfer_id") or f"phone-{int(time.time() * 1000)}")
+                    chunk_size = int(data.get("chunk_size") or TRANSFER_CHUNK_SIZE)
                     display_mode = data.get("display_mode", "both")
-                    filepath = os.path.join(state["save_dir"], filename)
+                    save_dir = state["save_dir"]
+                    os.makedirs(save_dir, exist_ok=True)
+                    filepath = _ensure_unique_path(os.path.join(save_dir, filename))
+                    part_path = f"{filepath}.part"
 
-                    logger.info(f"بدء استقبال ملف: {filename} ({fsize} bytes) | عدد الأجزاء: {chunks}")
+                    logger.info(f"بدء استقبال ملف: {filename} ({fsize} bytes) | عدد الأجزاء: {chunks} | transfer={transfer_id}")
                     start_time = time.time()
 
-                    base, ext = os.path.splitext(filepath)
-                    c = 1
-                    while os.path.exists(filepath):
-                        filepath = f"{base}_{c}{ext}"; c += 1
+                    try:
+                        free_bytes = shutil.disk_usage(save_dir).free
+                        if fsize > 0 and free_bytes < fsize + 64 * 1024 * 1024:
+                            raise OSError("disk_full")
 
-                    with open(filepath, 'wb') as f:
-                        for i in range(chunks):
-                            chunk = await websocket.recv()
-                            f.write(chunk)
+                        resume_offset = 0
+                        if os.path.exists(part_path):
+                            resume_offset = os.path.getsize(part_path)
+                            if fsize > 0 and resume_offset > fsize:
+                                resume_offset = 0
+                            if resume_offset == 0:
+                                try:
+                                    os.remove(part_path)
+                                except Exception:
+                                    pass
 
-                    elapsed = time.time() - start_time
-                    logger.info(f"تم استقبال الملف بنجاح: {filename} في {elapsed:.2f} ثانية")
+                        await _send_transfer_status(
+                            websocket,
+                            "ready",
+                            transfer_id=transfer_id,
+                            offset=resume_offset,
+                            received_bytes=resume_offset,
+                            received=resume_offset,
+                            total_chunks=chunks,
+                        )
 
-                    # ⚡ إرسال saved فوراً للهاتف قبل أي عمل آخر (لتقليل التأخير)
-                    await websocket.send(json.dumps({"status": "saved", "path": filepath}))
+                        received = resume_offset
+                        received_chunks = resume_offset // max(1, chunk_size)
+                        last_ack = time.time()
+                        with open(part_path, "ab" if resume_offset else "wb") as f:
+                            while received_chunks < chunks:
+                                chunk = await websocket.recv()
+                                if isinstance(chunk, str):
+                                    logger.debug(f"تجاهل رسالة تحكم أثناء استقبال الملف: {chunk[:120]}")
+                                    continue
+                                f.write(chunk)
+                                received += len(chunk)
+                                received_chunks += 1
+                                now = time.time()
+                                if received_chunks % 8 == 0 or now - last_ack >= 1:
+                                    await _send_transfer_status(
+                                        websocket,
+                                        "progress",
+                                        transfer_id=transfer_id,
+                                        received_bytes=received,
+                                        received=received,
+                                        chunk_index=received_chunks,
+                                        total_chunks=chunks,
+                                    )
+                                    last_ack = now
+                            f.flush()
+                            os.fsync(f.fileno())
+
+                        if fsize > 0 and received != fsize:
+                            raise IOError(f"incomplete_file expected={fsize} received={received}")
+
+                        await _send_transfer_status(
+                            websocket,
+                            "saving",
+                            transfer_id=transfer_id,
+                            received_bytes=received,
+                            received=received,
+                            total_chunks=chunks,
+                        )
+                        os.replace(part_path, filepath)
+
+                        elapsed = time.time() - start_time
+                        logger.info(f"تم استقبال الملف بنجاح: {filename} في {elapsed:.2f} ثانية")
+
+                        await _send_transfer_status(
+                            websocket,
+                            "saved",
+                            transfer_id=transfer_id,
+                            received_bytes=received,
+                            received=received,
+                            path=filepath,
+                            total_chunks=chunks,
+                        )
+                    except Exception as exc:
+                        reason = "disk_full" if str(exc) == "disk_full" else type(exc).__name__
+                        if reason in {"disk_full", "PermissionError"}:
+                            try:
+                                if os.path.exists(part_path):
+                                    os.remove(part_path)
+                            except Exception:
+                                pass
+                        report_windows_issue(
+                            "receive_file_failed",
+                            exc,
+                            direction="android_to_windows",
+                            phase="receive",
+                            transfer_id=transfer_id,
+                            size=fsize,
+                        )
+                        await _send_transfer_status(
+                            websocket,
+                            "error",
+                            transfer_id=transfer_id,
+                            reason=reason,
+                            message=str(exc),
+                        )
+                        raise
 
                     # الأعمال الثانوية بعد الرد (لا تؤخر الهاتف)
                     device_name = connected_device.get("name") if connected_device else "جهاز غير معروف"
@@ -3272,7 +3514,15 @@ def show_notification(title: str, message: str):
             pass
 
 async def run_ws_server():
-    async with serve(handle_client, "0.0.0.0", PORT_WS):
+    async with serve(
+        handle_client,
+        "0.0.0.0",
+        PORT_WS,
+        max_size=TRANSFER_MAX_FRAME_SIZE,
+        max_queue=8,
+        ping_interval=None,
+        ping_timeout=None,
+    ):
         await asyncio.Future()
 
 def start_ws_thread():
@@ -3427,6 +3677,8 @@ def _cleanup_on_exit():
 
 # ======================== Main ========================
 if __name__ == "__main__":
+    install_global_exception_hooks()
+
     # ── منع التكرار ──
     if not _acquire_instance_lock():
         # نسخة أخرى تعمل → أظهرها بدلاً من فتح نسخة جديدة
@@ -3460,4 +3712,5 @@ if __name__ == "__main__":
         app.run()
     except Exception as e:
         logger.exception("حدث خطأ فادح أدى لتوقف التطبيق")
-        report_windows_issue("fatal_app_error", e)
+        event_id = report_windows_issue("fatal_app_error", e)
+        show_error_report_dialog("fatal_app_error", e, event_id=event_id)

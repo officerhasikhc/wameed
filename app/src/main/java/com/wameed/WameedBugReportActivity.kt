@@ -27,6 +27,10 @@ import kotlinx.coroutines.launch
  * واجهة إبلاغ المستخدم عن المشاكل
  */
 class WameedBugReportActivity : ComponentActivity() {
+    companion object {
+        const val EXTRA_INITIAL_DESCRIPTION = "com.wameed.extra.INITIAL_DESCRIPTION"
+    }
+
     override fun attachBaseContext(newBase: android.content.Context) {
         super.attachBaseContext(LocaleHelper.wrap(newBase))
     }
@@ -35,8 +39,9 @@ class WameedBugReportActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         WameedCrashReporter.initialize(this)
         WameedLogger.init(this)
+        val initialDescription = intent.getStringExtra(EXTRA_INITIAL_DESCRIPTION).orEmpty()
         setContent {
-            BugReportScreen()
+            BugReportScreen(initialDescription = initialDescription)
         }
     }
 
@@ -47,12 +52,12 @@ class WameedBugReportActivity : ComponentActivity() {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun BugReportScreen() {
+fun BugReportScreen(initialDescription: String = "") {
     val context = LocalContext.current
     val crashReporter = WameedCrashReporter.getInstance()
     val coroutineScope = rememberCoroutineScope()
     
-    var description by remember { mutableStateOf("") }
+    var description by remember { mutableStateOf(initialDescription) }
     var email by remember { mutableStateOf("") }
     var isSending by remember { mutableStateOf(false) }
     

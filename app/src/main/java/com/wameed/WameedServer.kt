@@ -12,9 +12,7 @@ import io.ktor.server.websocket.*
 import io.ktor.websocket.*
 import kotlinx.coroutines.*
 import kotlinx.serialization.json.*
-import java.io.BufferedOutputStream
-import java.io.File
-import java.io.FileOutputStream
+import java.io.IOException
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.time.Duration.Companion.seconds
 
@@ -33,7 +31,7 @@ class WameedServer(private val context: Context) {
         fun onDeviceConnected(name: String, ip: String)
         fun onFileTransferStarted(filename: String, size: Long)
         fun onProgress(percent: Int, speedMbps: Double)
-        fun onTransferCompleted(file: File, filename: String)
+        fun onTransferCompleted(uri: String?, filename: String, size: Long)
         fun onError(error: String)
         fun onPairingRequest(deviceName: String, deviceId: String)
         fun onTextReceived(text: String, from: String)
@@ -118,13 +116,56 @@ class WameedServer(private val context: Context) {
     }
 
     private suspend fun handleConnection(session: DefaultWebSocketServerSession) {
-        var currentFile: File? = null
-        var fileOutput: BufferedOutputStream? = null
+        var currentDownload: FileSaver.PendingDownload? = null
+        var finalUri: String? = null
+        var finalFilename = "received_file"
         var expectedSize = 0L
         var receivedSize = 0L
         var chunkCount = 0
+        var expectedChunks = 0
+        var transferId = ""
         var startTime = 0L
+        var lastAckMs = 0L
         var deviceName = "PC"
+
+        suspend fun sendTransferStatus(status: String, extra: JsonObjectBuilder.() -> Unit = {}) {
+            session.send(Frame.Text(buildJsonObject {
+                put("status", status)
+                put("protocol_version", 2)
+                if (transferId.isNotBlank()) put("transfer_id", transferId)
+                put("received_bytes", receivedSize)
+                put("received", receivedSize)
+                put("chunk_index", chunkCount)
+                if (expectedChunks > 0) put("total_chunks", expectedChunks)
+                extra()
+            }.toString()))
+        }
+
+        suspend fun finalizeCurrentTransfer() {
+            val target = currentDownload ?: throw IOException("No active download target")
+            WameedCrashReporter.getInstance().setTransferDiagnostics(
+                direction = "windows_to_android",
+                phase = "finalizing",
+                sizeBytes = expectedSize,
+                bytesDone = receivedSize,
+                port = 7789
+            )
+            sendTransferStatus("saving")
+            withContext(Dispatchers.IO) {
+                target.flush()
+                target.close()
+                target.finish(true)
+            }
+            finalUri = target.uri?.toString()
+            finalFilename = target.filename
+            currentDownload = null
+            callback?.onTransferCompleted(finalUri, finalFilename, receivedSize)
+            sendTransferStatus("saved") {
+                finalUri?.let { put("uri", it) }
+                put("filename", finalFilename)
+                put("size", receivedSize)
+            }
+        }
 
         try {
             for (frame in session.incoming) {
@@ -171,21 +212,53 @@ class WameedServer(private val context: Context) {
                             }
                             "file_meta" -> {
                                 val filename = json["filename"]?.jsonPrimitive?.content ?: "received_file"
-                                expectedSize = json["size"]?.jsonPrimitive?.long ?: 0L
-                                
-                                val tempFile = File(context.cacheDir, "wameed_receive_$filename")
-                                currentFile = tempFile
-                                withContext(Dispatchers.IO) {
-                                    fileOutput = BufferedOutputStream(
-                                        FileOutputStream(tempFile), 512 * 1024
-                                    )
+                                val mimeType = json["mime"]?.jsonPrimitive?.contentOrNull
+                                expectedSize = json["size"]?.jsonPrimitive?.content?.toLongOrNull() ?: 0L
+                                expectedChunks = json["chunks"]?.jsonPrimitive?.content?.toIntOrNull() ?: 0
+                                transferId = json["transfer_id"]?.jsonPrimitive?.contentOrNull
+                                    ?: "android-recv-${System.currentTimeMillis()}"
+                                finalFilename = filename
+
+                                val target = FileSaver.openDownloadStream(
+                                    context = context,
+                                    originalName = filename,
+                                    mimeType = mimeType,
+                                    expectedSize = expectedSize
+                                )
+
+                                if (target == null) {
+                                    sendTransferStatus("error") {
+                                        put("reason", "permission_denied")
+                                        put("message", "Could not open Downloads destination")
+                                    }
+                                    callback?.onError("Could not open Downloads destination")
+                                    continue
                                 }
+
+                                currentDownload = target
+                                finalUri = target.uri?.toString()
                                 receivedSize = 0L
                                 chunkCount = 0
                                 startTime = System.currentTimeMillis()
+                                lastAckMs = startTime
                                 
                                 callback?.onFileTransferStarted(filename, expectedSize)
-                                Log.i(TAG, "Receiving file: $filename, size: $expectedSize")
+                                Log.i(TAG, "Receiving file: $filename, size: $expectedSize, transfer=$transferId")
+                                WameedCrashReporter.getInstance().setTransferDiagnostics(
+                                    direction = "windows_to_android",
+                                    phase = "receive",
+                                    sizeBytes = expectedSize,
+                                    bytesDone = 0L,
+                                    port = 7789
+                                )
+                                sendTransferStatus("ready") {
+                                    put("offset", 0L)
+                                    finalUri?.let { put("uri", it) }
+                                }
+
+                                if (expectedSize == 0L) {
+                                    finalizeCurrentTransfer()
+                                }
                             }
                             "text" -> {
                                 val content = json["text"]?.jsonPrimitive?.content ?: ""
@@ -216,7 +289,7 @@ class WameedServer(private val context: Context) {
                     is Frame.Binary -> {
                         val data = frame.readBytes()
                         withContext(Dispatchers.IO) {
-                            fileOutput?.write(data)
+                            currentDownload?.write(data) ?: throw IOException("Received file chunk before file_meta")
                         }
                         receivedSize += data.size
                         chunkCount++
@@ -229,39 +302,25 @@ class WameedServer(private val context: Context) {
                             callback?.onProgress(percent, speedMbps)
                         }
 
-                        // أرسل ack للمرسل كل 8 chunks لإبقاء الـ watchdog حياً أثناء الملفات الكبيرة
-                        if (chunkCount % 8 == 0) {
+                        // Send progress acknowledgements so large transfers never look idle.
+                        if (chunkCount % 8 == 0 || now - lastAckMs >= 1000L) {
                             try {
-                                session.send(Frame.Text(
-                                    buildJsonObject {
-                                        put("status", "progress")
-                                        put("received", receivedSize)
-                                    }.toString()
-                                ))
+                                WameedCrashReporter.getInstance().setTransferDiagnostics(
+                                    direction = "windows_to_android",
+                                    phase = "receive",
+                                    sizeBytes = expectedSize,
+                                    bytesDone = receivedSize,
+                                    port = 7789
+                                )
+                                sendTransferStatus("progress") {
+                                    put("offset", receivedSize)
+                                }
+                                lastAckMs = now
                             } catch (_: Exception) {}
                         }
 
                         if (expectedSize > 0 && receivedSize >= expectedSize) {
-                            withContext(Dispatchers.IO) {
-                                fileOutput?.flush()
-                                fileOutput?.close()
-                            }
-                            fileOutput = null
-
-                            // أرسل حالة "saving" قبل بدء عمليات MediaStore المكلفة لتجنب timeout في طرف المرسل
-                            try {
-                                session.send(Frame.Text(buildJsonObject {
-                                    put("status", "saving")
-                                }.toString()))
-                            } catch (_: Exception) {}
-
-                            val finalFilename = currentFile?.name?.removePrefix("wameed_receive_") ?: "received_file"
-                            currentFile?.let { callback?.onTransferCompleted(it, finalFilename) }
-
-                            val response = buildJsonObject {
-                                put("status", "saved")
-                            }.toString()
-                            session.send(Frame.Text(response))
+                            finalizeCurrentTransfer()
                         }
                     }
                     else -> {}
@@ -269,12 +328,21 @@ class WameedServer(private val context: Context) {
             }
         } catch (e: Exception) {
             Log.e(TAG, "Connection error", e)
+            WameedCrashReporter.getInstance().setTransferDiagnostics(
+                direction = "windows_to_android",
+                phase = "receive",
+                sizeBytes = expectedSize,
+                bytesDone = receivedSize,
+                port = 7789,
+                failureType = e.javaClass.simpleName
+            )
             callback?.onError(e.message ?: "Transfer interrupted")
         } finally {
             withContext(Dispatchers.IO) {
                 try {
-                    fileOutput?.close()
+                    currentDownload?.close()
                 } catch (_: Exception) {}
+                currentDownload?.finish(false)
             }
         }
     }

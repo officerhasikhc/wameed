@@ -176,6 +176,11 @@
     <string name="bug_report_success">تم إرسال التقرير بنجاح! شكراً لمساعدتك.</string>
     <string name="bug_report_failed">حدث خطأ أثناء الإرسال. يرجى المحاولة مرة أخرى.</string>
     <string name="bug_report_empty">يرجى كتابة وصف للمشكلة</string>
+    <string name="crash_report_title">تم إرسال تقرير عطل</string>
+    <string name="crash_report_message">توقف وميض في التشغيل السابق. أُرسل التقرير التقني تلقائياً إلى Crashlytics حتى يمكن تحليله. النوع: %1$s\nالتفاصيل: %2$s</string>
+    <string name="crash_report_add_details">إضافة وصف</string>
+    <string name="crash_report_later">لاحقاً</string>
+    <string name="crash_report_prefill">تقرير عطل سابق\nالنوع: %1$s\nالخيط: %2$s\nالرسالة: %3$s\n\nماذا كنت تفعل قبل حدوث المشكلة؟</string>
     
     <!-- نظام التحديث -->
     <string name="update_available">تحديث جديد متاح</string>

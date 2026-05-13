@@ -1,0 +1,37 @@
+# Crashlytics - Stack trace
+# Application: com.wameed
+# Platform: android
+# Version: 2.0.0 (20)
+# Issue: abd2855712e6386e34453f4bcddae822
+# Session: 6A036CA8022800015F5C101402BE4D46_DNE_0_v2
+# Date: Tue May 12 2026 22:09:36 GMT+0400 (Gulf Standard Time)
+
+Non-fatal Exception: java.net.SocketTimeoutException: failed to connect to /192.168.100.203 (port 7788) from /192.168.100.200 (port 51270) after 3000ms
+       at libcore.io.IoBridge.connectErrno(IoBridge.java:235)
+       at libcore.io.IoBridge.connect(IoBridge.java:179)
+       at java.net.PlainSocketImpl.socketConnect(PlainSocketImpl.java:142)
+       at java.net.AbstractPlainSocketImpl.doConnect(AbstractPlainSocketImpl.java:390)
+       at java.net.AbstractPlainSocketImpl.connectToAddress(AbstractPlainSocketImpl.java:230)
+       at java.net.AbstractPlainSocketImpl.connect(AbstractPlainSocketImpl.java:212)
+       at java.net.SocksSocketImpl.connect(SocksSocketImpl.java:436)
+       at java.net.Socket.connect(Socket.java:646)
+       at okhttp3.internal.platform.Platform.connectSocket(Platform.kt:128)
+       at okhttp3.internal.connection.RealConnection.connectSocket(RealConnection.kt:295)
+       at okhttp3.internal.connection.RealConnection.connect(RealConnection.kt:207)
+       at okhttp3.internal.connection.ExchangeFinder.findConnection(ExchangeFinder.kt:226)
+       at okhttp3.internal.connection.ExchangeFinder.findHealthyConnection(ExchangeFinder.kt:106)
+       at okhttp3.internal.connection.ExchangeFinder.find(ExchangeFinder.kt:74)
+       at okhttp3.internal.connection.RealCall.initExchange$okhttp(RealCall.kt:255)
+       at okhttp3.internal.connection.ConnectInterceptor.intercept(ConnectInterceptor.kt:32)
+       at okhttp3.internal.http.RealInterceptorChain.proceed(RealInterceptorChain.kt:109)
+       at okhttp3.internal.cache.CacheInterceptor.intercept(CacheInterceptor.kt:95)
+       at okhttp3.internal.http.RealInterceptorChain.proceed(RealInterceptorChain.kt:109)
+       at okhttp3.internal.http.BridgeInterceptor.intercept(BridgeInterceptor.kt:83)
+       at okhttp3.internal.http.RealInterceptorChain.proceed(RealInterceptorChain.kt:109)
+       at okhttp3.internal.http.RetryAndFollowUpInterceptor.intercept(RetryAndFollowUpInterceptor.kt:76)
+       at okhttp3.internal.http.RealInterceptorChain.proceed(RealInterceptorChain.kt:109)
+       at okhttp3.internal.connection.RealCall.getResponseWithInterceptorChain$okhttp(RealCall.kt:201)
+       at okhttp3.internal.connection.RealCall$AsyncCall.run(RealCall.kt:517)
+       at java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1154)
+       at java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:652)
+       at java.lang.Thread.run(Thread.java:1564)

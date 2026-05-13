@@ -345,18 +345,33 @@ class WameedSender(private val context: Context) {
             val responseQueue = java.util.concurrent.LinkedBlockingQueue<JSONObject>()
             val finishedFlag = java.util.concurrent.atomic.AtomicBoolean(false)
             val lastProgressMs = java.util.concurrent.atomic.AtomicLong(System.currentTimeMillis())
+            val currentIdleTimeoutMs = java.util.concurrent.atomic.AtomicLong(120_000L)
+            val currentPhase = java.util.concurrent.atomic.AtomicReference("connect")
+            val currentTransferSize = java.util.concurrent.atomic.AtomicLong(0L)
+            val currentBytesDone = java.util.concurrent.atomic.AtomicLong(0L)
             // علامة: جميع البيانات أُرسلت وننتظر ACK فقط — لا نعتبر انقطاع الاتصال فشلاً
             val allDataSentFlag = java.util.concurrent.atomic.AtomicBoolean(false)
             var currentWebSocket: WebSocket? = null
 
-            // Global Watchdog: kills the operation if there is no activity for 2 minutes
+            // Phase-aware watchdog: large files can spend longer in transfer/finalize
+            // as long as the peer keeps sending progress or saving acknowledgements.
             val watchdogThread = Thread {
                 try {
                     while (!finishedFlag.get()) {
                         val idle = System.currentTimeMillis() - lastProgressMs.get()
-                        if (idle > 120_000L) {
+                        val timeout = currentIdleTimeoutMs.get()
+                        if (idle > timeout) {
                             if (finishedFlag.compareAndSet(false, true)) {
-                                WameedLogger.e(TAG, "Global batch watchdog fired - no response for 2 minutes")
+                                val phase = currentPhase.get()
+                                WameedCrashReporter.getInstance().setTransferDiagnostics(
+                                    direction = "android_to_windows",
+                                    phase = phase,
+                                    sizeBytes = currentTransferSize.get(),
+                                    bytesDone = currentBytesDone.get(),
+                                    port = WameedPrefs.getPcPort(context),
+                                    failureType = "network_timeout"
+                                )
+                                WameedLogger.e(TAG, "Batch watchdog fired in phase=$phase after ${idle}ms without peer activity")
                                 callback.onError(context.getString(R.string.error_timeout_pc_no_response))
                                 currentWebSocket?.close(1000, null)
                             }
@@ -368,6 +383,27 @@ class WameedSender(private val context: Context) {
             }.apply { isDaemon = true; start() }
 
             fun bumpWatchdog() = lastProgressMs.set(System.currentTimeMillis())
+            fun setPhase(phase: String, sizeBytes: Long = currentTransferSize.get(), bytesDone: Long = currentBytesDone.get()) {
+                currentPhase.set(phase)
+                currentTransferSize.set(sizeBytes)
+                currentBytesDone.set(bytesDone)
+                currentIdleTimeoutMs.set(
+                    when (phase) {
+                        "handshake" -> 60_000L
+                        "transfer" -> 180_000L
+                        "finalizing" -> maxOf(180_000L, sizeBytes / (2L * 1024 * 1024) * 1000L + 120_000L)
+                        else -> 120_000L
+                    }
+                )
+                WameedCrashReporter.getInstance().setTransferDiagnostics(
+                    direction = "android_to_windows",
+                    phase = phase,
+                    sizeBytes = sizeBytes,
+                    bytesDone = bytesDone,
+                    port = WameedPrefs.getPcPort(context)
+                )
+                bumpWatchdog()
+            }
 
             Log.d(TAG, "فتح WebSocket للإرسال المتعدد: $wsUrl")
             val request = Request.Builder().url(wsUrl).build()
@@ -380,6 +416,8 @@ class WameedSender(private val context: Context) {
                         put("device", WameedPrefs.getDeviceName())
                         put("device_id", WameedPrefs.getOrCreateDeviceId(context))
                         put("app_version", BuildConfig.VERSION_NAME)
+                        put("protocol_version", 2)
+                        put("receiver_port", 7789)
                     }
                     webSocket.send(hello.toString())
                 }
@@ -394,11 +432,18 @@ class WameedSender(private val context: Context) {
                 }
 
                 override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                    WameedLogger.e(TAG, "خطأ في WebSocket للإرسال: ${t.javaClass.simpleName} — ${t.message}", t)
                     if (allDataSentFlag.get()) {
-                        // جميع البيانات أُرسلت — لا نعتبر الانقطاع فشلاً (Broken Pipe أثناء ACK)
-                        Log.w(TAG, "⚠️ انقطاع WebSocket بعد إرسال جميع البيانات (${t.javaClass.simpleName})")
+                        WameedLogger.w(TAG, "WebSocket closed before final ACK: ${t.javaClass.simpleName} — ${t.message}", t)
                     } else if (finishedFlag.compareAndSet(false, true)) {
+                        WameedCrashReporter.getInstance().setTransferDiagnostics(
+                            direction = "android_to_windows",
+                            phase = currentPhase.get(),
+                            sizeBytes = currentTransferSize.get(),
+                            bytesDone = currentBytesDone.get(),
+                            port = WameedPrefs.getPcPort(context),
+                            failureType = "peer_closed"
+                        )
+                        WameedLogger.e(TAG, "خطأ في WebSocket للإرسال: ${t.javaClass.simpleName} — ${t.message}", t)
                         val msg = when {
                             t is java.net.ConnectException -> context.getString(R.string.error_connect_failed)
                             t is java.net.SocketTimeoutException -> context.getString(R.string.error_socket_timeout)
@@ -412,6 +457,7 @@ class WameedSender(private val context: Context) {
 
             try {
                 // Phase 1: Handshake/Pairing (once per session)
+                setPhase("handshake")
                 var paired = false
                 Log.d(TAG, "انتظار حالة الاقتران...")
                 while (!finishedFlag.get() && !paired) {
@@ -431,7 +477,7 @@ class WameedSender(private val context: Context) {
                             Log.w(TAG, "تم رفض طلب الاقتران من الكمبيوتر")
                             if (finishedFlag.compareAndSet(false, true)) {
                                 callback.onError(resp.optString("message", context.getString(R.string.error_pairing_rejected)))
-                                currentWebSocket.close(1000, null)
+                                currentWebSocket?.close(1000, null)
                             }
                             return@Thread
                         }
@@ -446,7 +492,7 @@ class WameedSender(private val context: Context) {
                     WameedLogger.e(TAG, "فشل الاتصال: لم يكتمل الاقتران")
                     if (finishedFlag.compareAndSet(false, true)) {
                         callback.onError(context.getString(R.string.error_timeout_pc_no_response))
-                        currentWebSocket.close(1000, null)
+                        currentWebSocket?.close(1000, null)
                     }
                     return@Thread
                 }
@@ -462,6 +508,7 @@ class WameedSender(private val context: Context) {
                     val filename = getFilename(uri, mimeType)
                     Log.i(TAG, "جاري تحضير ملف [${index+1}/${uris.size}]: $filename ($mimeType)")
                     callback.onNextFile(index + 1, uris.size, filename)
+                    setPhase("preparing", 0L, 0L)
 
                     var fileSize = resolveSize(uri)
                     var tempFile: java.io.File? = null
@@ -481,6 +528,9 @@ class WameedSender(private val context: Context) {
                                     while (ins.read(buf).also { n = it } > 0) {
                                         total += n
                                         if (total > MAX) throw IOException(context.getString(R.string.error_file_too_large))
+                                        if ((tempFile.parentFile?.usableSpace ?: Long.MAX_VALUE) < 64L * 1024 * 1024) {
+                                            throw IOException("Not enough temporary storage")
+                                        }
                                         out.write(buf, 0, n)
                                         bumpWatchdog()
                                         // Optional: update UI that we are still preparing
@@ -509,19 +559,47 @@ class WameedSender(private val context: Context) {
 
                     val chunkSize = 1024 * 1024
                     val totalChunks = ((fileSize + chunkSize - 1) / chunkSize).toInt()
+                    val transferId = createTransferId(filename, fileSize)
+                    setPhase("transfer", fileSize, 0L)
 
                     // Send metadata
                     Log.d(TAG, "إرسال البيانات الوصفية للملف: $filename (Chunks: $totalChunks)")
                     val meta = JSONObject().apply {
                         put("type", "file_meta")
+                        put("protocol_version", 2)
+                        put("transfer_id", transferId)
+                        put("direction", "android_to_windows")
                         put("filename", filename)
                         put("mime", mimeType)
                         put("size", fileSize)
                         put("chunks", totalChunks)
+                        put("chunk_size", chunkSize)
                         put("display_mode", WameedPrefs.getDisplayMode(context))
                     }
-                    currentWebSocket.send(meta.toString())
+                    currentWebSocket?.send(meta.toString())
                     bumpWatchdog()
+
+                    var resumeOffset = 0L
+                    val readyResp = responseQueue.poll(750, TimeUnit.MILLISECONDS)
+                    if (readyResp != null) {
+                        when (readyResp.optString("status")) {
+                            "ready" -> {
+                                resumeOffset = readyResp.optLong("offset", 0L).coerceIn(0L, fileSize)
+                                if (resumeOffset > 0L) {
+                                    Log.i(TAG, "استئناف إرسال $filename من $resumeOffset bytes")
+                                    currentBytesDone.set(resumeOffset)
+                                    callback.onProgress(((resumeOffset * 100) / fileSize).toInt())
+                                }
+                            }
+                            "error" -> {
+                                WameedLogger.e(TAG, "الكمبيوتر رفض استقبال الملف: ${readyResp.optString("message")}")
+                                callback.onError(readyResp.optString("message", context.getString(R.string.error_save_failed)))
+                                finishedFlag.set(true)
+                                break
+                            }
+                            else -> responseQueue.offer(readyResp)
+                        }
+                    }
 
                     // Stream binary data
                     val inputStream = if (tempFile != null) java.io.FileInputStream(tempFile) 
@@ -530,27 +608,29 @@ class WameedSender(private val context: Context) {
                     try {
                         inputStream?.use { stream ->
                             val buffer = ByteArray(chunkSize)
-                            var chunkIdx = 0
+                            skipFully(stream, resumeOffset, buffer)
+                            var chunkIdx = (resumeOffset / chunkSize).toInt()
                             var n: Int
-                            var totalBytesSent = 0L
+                            var totalBytesSent = resumeOffset
                             var lastLogTime = System.currentTimeMillis()
                             var lastCalcTime = System.currentTimeMillis()
-                            var lastCalcBytes = 0L
+                            var lastCalcBytes = resumeOffset
 
                             while (stream.read(buffer).also { n = it } > 0) {
                                 if (finishedFlag.get()) break
                                 
-                                while (currentWebSocket!!.queueSize() > 16 * 1024 * 1024) {
+                                while ((currentWebSocket?.queueSize() ?: 0L) > 16 * 1024 * 1024) {
                                     Thread.sleep(1)
                                     bumpWatchdog()
                                 }
 
                                 val chunkData = buffer.toByteString(0, n)
-                                if (!currentWebSocket!!.send(chunkData)) {
+                                if (currentWebSocket?.send(chunkData) != true) {
                                     throw IOException("Failed to enqueue chunk")
                                 }
 
                                 totalBytesSent += n
+                                currentBytesDone.set(totalBytesSent)
                                 chunkIdx++
 
                                 val now = System.currentTimeMillis()
@@ -565,6 +645,13 @@ class WameedSender(private val context: Context) {
                                     val speedMbps = (deltaBytes * 8.0) / (1024.0 * 1024.0 * deltaSec)
                                     val progress = 5 + (chunkIdx * 93 / totalChunks) 
                                     callback.onProgress(progress, speedMbps)
+                                    WameedCrashReporter.getInstance().setTransferDiagnostics(
+                                        direction = "android_to_windows",
+                                        phase = "transfer",
+                                        sizeBytes = fileSize,
+                                        bytesDone = totalBytesSent,
+                                        port = WameedPrefs.getPcPort(context)
+                                    )
                                     lastCalcTime = now
                                     lastCalcBytes = totalBytesSent
                                 }
@@ -584,6 +671,7 @@ class WameedSender(private val context: Context) {
                     if (finishedFlag.get()) break
 
                     // Wait for ACK
+                    setPhase("finalizing", fileSize, currentBytesDone.get())
                     val fileWatchdogMs = maxOf(30_000L, fileSize / (256L * 1024) * 1000L + 30_000L)
                     var ackReceived = false
                     val ackStart = System.currentTimeMillis()
@@ -612,19 +700,21 @@ class WameedSender(private val context: Context) {
                             Log.d(TAG, "الطرف الآخر يقوم بحفظ الملف حالياً...")
                             callback.onInfo(context.getString(R.string.status_saving_on_pc))
                             bumpWatchdog() // Reset watchdog because we know it's working
+                        } else if (status == "progress") {
+                            val received = resp.optLong("received_bytes", resp.optLong("received", currentBytesDone.get()))
+                            if (received > 0L) {
+                                currentBytesDone.set(received.coerceAtMost(fileSize))
+                            }
+                            bumpWatchdog()
                         } else if (status == "error") {
                             WameedLogger.e(TAG, "❌ فشل حفظ الملف على الكمبيوتر: ${resp.optString("message")}")
                             callback.onError(resp.optString("message", context.getString(R.string.error_save_failed)))
                             finishedFlag.set(true)
                             break
                         } else if (status == "ws_failure") {
-                            // انقطع الاتصال أثناء انتظار ACK — لكن جميع البيانات أُرسلت بالفعل.
-                            // الكمبيوتر يرسل "saved" فوراً بعد كتابة الملف، فإذا وصلنا هنا
-                            // فالأرجح أن الملف حُفظ والاتصال انقطع بعدها (Broken Pipe).
-                            // نعتبرها نجاح محتمل بدلاً من فشل كامل.
-                            Log.w(TAG, "⚠️ انقطع الاتصال أثناء انتظار ACK لـ $filename — اعتبار الملف مُرسل (بيانات كاملة)")
-                            ackReceived = true
-                            callback.onProgress(100)
+                            WameedLogger.e(TAG, "انقطع الاتصال قبل تأكيد حفظ الملف $filename")
+                            callback.onError(context.getString(R.string.error_timeout_pc_no_response))
+                            finishedFlag.set(true)
                             break
                         }
                         bumpWatchdog()
@@ -725,6 +815,28 @@ class WameedSender(private val context: Context) {
                 }
             }
         })
+    }
+
+    private fun createTransferId(filename: String, fileSize: Long): String {
+        val raw = "${filename.trim().lowercase()}:$fileSize"
+        val digest = java.security.MessageDigest.getInstance("SHA-256")
+            .digest(raw.toByteArray(Charsets.UTF_8))
+            .joinToString("") { "%02x".format(it) }
+        return "a2w-${digest.take(20)}"
+    }
+
+    private fun skipFully(stream: java.io.InputStream, bytesToSkip: Long, scratch: ByteArray) {
+        var remaining = bytesToSkip
+        while (remaining > 0) {
+            val skipped = stream.skip(remaining)
+            if (skipped > 0) {
+                remaining -= skipped
+            } else {
+                val read = stream.read(scratch, 0, minOf(scratch.size.toLong(), remaining).toInt())
+                if (read <= 0) break
+                remaining -= read
+            }
+        }
     }
 
     /** Robust size lookup. Returns -1 if unknown.

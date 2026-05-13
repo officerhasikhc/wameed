@@ -20,7 +20,6 @@ import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import org.json.JSONObject
-import java.io.File
 import java.util.concurrent.TimeUnit
 
 /**
@@ -429,7 +428,7 @@ class WameedConnectionService : Service() {
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
                 Log.w(TAG, "WS failure: ${t.message}")
-                WameedLogger.e(TAG, "WS failure: ${t.javaClass.simpleName} — ${t.message}", t)
+                WameedLogger.w(TAG, "WS failure: ${t.javaClass.simpleName} — ${t.message}", t)
                 ws = null
                 pingFailures++
                 // Debounce: delay ServiceStatus(false) by 3s to avoid UI flicker
@@ -600,19 +599,18 @@ class WameedConnectionService : Service() {
                     WameedEvents.tryEmit(WameedEvent.ReceiveProgress(percent, speedMbps))
                 }
 
-                override fun onTransferCompleted(file: File, filename: String) {
-                    val uri = FileSaver.saveFileToDownloads(this@WameedConnectionService, file, filename)
-                    WameedEvents.tryEmit(WameedEvent.ReceiveComplete(uri?.toString()))
+                override fun onTransferCompleted(uri: String?, filename: String, size: Long) {
+                    WameedEvents.tryEmit(WameedEvent.ReceiveComplete(uri))
 
                     // إضافة السجل للتاريخ
-                    WameedPrefs.addHistoryEntry(this@WameedConnectionService, filename, "file", file.length(), "success", "received")
+                    WameedPrefs.addHistoryEntry(this@WameedConnectionService, filename, "file", size, "success", "received")
 
                     // Open ReceiveActivity with the final URI embedded.
                     // This way even tiny files that finish in <50ms show success immediately.
                     val intent = Intent(this@WameedConnectionService, ReceiveActivity::class.java).apply {
                         putExtra("filename", filename)
-                        putExtra("size", file.length())
-                        putExtra("completed_uri", uri?.toString())
+                        putExtra("size", size)
+                        putExtra("completed_uri", uri)
                         addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                     }
                     startActivity(intent)

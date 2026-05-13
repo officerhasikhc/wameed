@@ -21,8 +21,17 @@ class WameedCrashReporter private constructor() {
     private val crashlytics = Firebase.crashlytics
     private val lastRecordedAt = ConcurrentHashMap<String, Long>()
     private val softSignalCounts = ConcurrentHashMap<String, Int>()
+    @Volatile
+    private var uncaughtHandlerInstalled = false
     
     companion object {
+        private const val CRASH_PREFS = "wameed_crash_reporting"
+        private const val KEY_PENDING_CRASH = "pending_crash"
+        private const val KEY_CRASH_TYPE = "crash_type"
+        private const val KEY_CRASH_MESSAGE = "crash_message"
+        private const val KEY_CRASH_THREAD = "crash_thread"
+        private const val KEY_CRASH_TIME = "crash_time"
+
         @Volatile
         private var INSTANCE: WameedCrashReporter? = null
         @Volatile
@@ -41,8 +50,10 @@ class WameedCrashReporter private constructor() {
          */
         fun initialize(context: Context) {
             val instance = getInstance()
-            instance.setDeviceInfo(context.applicationContext)
-            instance.refreshContext(context.applicationContext)
+            val appContext = context.applicationContext
+            instance.setDeviceInfo(appContext)
+            instance.refreshContext(appContext)
+            instance.installUncaughtHandler(appContext)
             
             if (!initialized) {
                 // تفعيل Crashlytics دائماً (debug + release)
@@ -103,6 +114,49 @@ class WameedCrashReporter private constructor() {
         crashlytics.log(message.take(900))
     }
 
+    data class PendingCrashReport(
+        val type: String,
+        val message: String,
+        val thread: String,
+        val timestamp: Long
+    )
+
+    fun consumePendingCrashReport(context: Context): PendingCrashReport? {
+        val prefs = context.getSharedPreferences(CRASH_PREFS, Context.MODE_PRIVATE)
+        if (!prefs.getBoolean(KEY_PENDING_CRASH, false)) return null
+
+        val report = PendingCrashReport(
+            type = prefs.getString(KEY_CRASH_TYPE, "Unknown") ?: "Unknown",
+            message = prefs.getString(KEY_CRASH_MESSAGE, "") ?: "",
+            thread = prefs.getString(KEY_CRASH_THREAD, "") ?: "",
+            timestamp = prefs.getLong(KEY_CRASH_TIME, 0L)
+        )
+
+        prefs.edit()
+            .putBoolean(KEY_PENDING_CRASH, false)
+            .apply()
+
+        return report
+    }
+
+    fun setTransferDiagnostics(
+        direction: String,
+        phase: String,
+        sizeBytes: Long,
+        bytesDone: Long,
+        port: Int,
+        failureType: String = ""
+    ) {
+        crashlytics.setCustomKey("transfer_direction", direction.take(32))
+        crashlytics.setCustomKey("transfer_phase", phase.take(32))
+        crashlytics.setCustomKey("transfer_size_bucket", sizeBucket(sizeBytes))
+        crashlytics.setCustomKey("transfer_bytes_done_mb", (bytesDone / (1024 * 1024)).toString())
+        crashlytics.setCustomKey("transfer_port", port.toString())
+        if (failureType.isNotBlank()) {
+            crashlytics.setCustomKey("transfer_failure_type", failureType.take(40))
+        }
+    }
+
     /**
      * يربط WameedLogger بـ Firebase: السطور المهمة تصبح breadcrumbs،
      * والأخطاء/فشل الشبكة تتحول إلى non-fatal throttled حتى لا نغرق Crashlytics.
@@ -153,7 +207,8 @@ class WameedCrashReporter private constructor() {
             })
             val countKey = "$category:$tag:${throwable?.javaClass?.name.orEmpty()}:${message.take(80)}"
             val count = softSignalCounts.merge(countKey, 1) { old, one -> old + one } ?: 1
-            if (count % 3 != 0) return
+            crashlytics.setCustomKey("persistent_ws_soft_count", count.toString())
+            if (count < 5 || count % 5 != 0) return
         }
 
         recordNonFatal(
@@ -170,8 +225,8 @@ class WameedCrashReporter private constructor() {
             text.contains("pairing") || text.contains("اقتران") -> "pairing_timeout"
             text.contains("firewall") || text.contains("جدار") || text.contains("محجوب") -> "firewall_suspected"
             text.contains("update") || text.contains("تحديث") || text.contains("install") -> "update_failed"
-            text.contains("send") || text.contains("إرسال") || text.contains("ارسال") -> "send_failed"
             text.contains("persistent ws") || text.contains("ws failure") || text.contains("websocket") -> "persistent_ws_disconnect"
+            text.contains("send") || text.contains("إرسال") || text.contains("ارسال") -> "send_failed"
             else -> "app_log_error"
         }
     }
@@ -274,6 +329,54 @@ class WameedCrashReporter private constructor() {
         if (ip.isBlank()) return "not_configured"
         val parts = ip.split(".")
         return if (parts.size == 4) "${parts[0]}.${parts[1]}.${parts[2]}.x" else "non_ipv4"
+    }
+
+    private fun sizeBucket(bytes: Long): String {
+        if (bytes <= 0) return "unknown"
+        val mb = bytes / (1024 * 1024)
+        return when {
+            mb < 10 -> "lt_10mb"
+            mb < 100 -> "10_100mb"
+            mb < 1024 -> "100mb_1gb"
+            mb < 4096 -> "1_4gb"
+            else -> "gt_4gb"
+        }
+    }
+
+    private fun installUncaughtHandler(context: Context) {
+        if (uncaughtHandlerInstalled) return
+        synchronized(this) {
+            if (uncaughtHandlerInstalled) return
+            val previousHandler = Thread.getDefaultUncaughtExceptionHandler()
+            Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
+                try {
+                    refreshContext(context)
+                    crashlytics.setCustomKey("fatal_thread", thread.name.take(80))
+                    crashlytics.setCustomKey("fatal_type", throwable.javaClass.simpleName.take(80))
+                    crashlytics.setCustomKey("fatal_message", (throwable.message ?: "").take(180))
+                    crashlytics.log("FATAL[${thread.name}]: ${throwable.javaClass.simpleName}: ${(throwable.message ?: "").take(500)}")
+                    attachRecentLogs()
+
+                    context.getSharedPreferences(CRASH_PREFS, Context.MODE_PRIVATE)
+                        .edit()
+                        .putBoolean(KEY_PENDING_CRASH, true)
+                        .putString(KEY_CRASH_TYPE, throwable.javaClass.simpleName.take(80))
+                        .putString(KEY_CRASH_MESSAGE, (throwable.message ?: "").take(240))
+                        .putString(KEY_CRASH_THREAD, thread.name.take(80))
+                        .putLong(KEY_CRASH_TIME, System.currentTimeMillis())
+                        .commit()
+                } catch (_: Exception) {
+                } finally {
+                    if (previousHandler != null) {
+                        previousHandler.uncaughtException(thread, throwable)
+                    } else {
+                        android.os.Process.killProcess(android.os.Process.myPid())
+                        kotlin.system.exitProcess(10)
+                    }
+                }
+            }
+            uncaughtHandlerInstalled = true
+        }
     }
 
     private class WameedNonFatalException(message: String) : Exception(message)

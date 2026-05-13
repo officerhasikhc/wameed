@@ -185,6 +185,9 @@ fun MainScreen(sender: WameedSender, discovery: DeviceDiscovery, updateManager: 
     var selectedDevice by remember { mutableStateOf<DeviceDiscovery.DiscoveredDevice?>(null) }
     val showManualDialog = remember { mutableStateOf(false) }
     var manualIp by remember { mutableStateOf("") }
+    var pendingCrashReport by remember {
+        mutableStateOf(WameedCrashReporter.getInstance().consumePendingCrashReport(context))
+    }
 
     val mainHandler = remember { Handler(Looper.getMainLooper()) }
     
@@ -637,6 +640,44 @@ fun MainScreen(sender: WameedSender, discovery: DeviceDiscovery, updateManager: 
                 infoStatus = currentInfoStatus
             )
         }
+    }
+
+    pendingCrashReport?.let { report ->
+        AlertDialog(
+            onDismissRequest = { pendingCrashReport = null },
+            title = { Text(stringResource(R.string.crash_report_title)) },
+            text = {
+                Text(
+                    stringResource(
+                        R.string.crash_report_message,
+                        report.type,
+                        report.message.ifBlank { report.thread }
+                    )
+                )
+            },
+            confirmButton = {
+                Button(onClick = {
+                    val description = context.getString(
+                        R.string.crash_report_prefill,
+                        report.type,
+                        report.thread,
+                        report.message.ifBlank { "no message" }
+                    )
+                    context.startActivity(
+                        Intent(context, WameedBugReportActivity::class.java)
+                            .putExtra(WameedBugReportActivity.EXTRA_INITIAL_DESCRIPTION, description)
+                    )
+                    pendingCrashReport = null
+                }) {
+                    Text(stringResource(R.string.crash_report_add_details))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingCrashReport = null }) {
+                    Text(stringResource(R.string.crash_report_later))
+                }
+            }
+        )
     }
 
     if (showManualDialog.value) {
@@ -1377,34 +1418,35 @@ fun SettingsTab(modifier: Modifier, updateManager: WameedUpdateManager, onShowTr
 
         Spacer(Modifier.height(16.dp))
 
-        // Test Crash button
-        Surface(Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp),
-            color = Color(0xFFFF5252).copy(alpha = 0.1f), shadowElevation = 1.dp) {
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .clickable {
-                        // Test crash for Firebase Crashlytics
-                        Log.d("FirebaseTest", "About to trigger test crash for Crashlytics")
-                        val testException = RuntimeException("Test Crash - Firebase Crashlytics Testing")
-                        Firebase.crashlytics.recordException(testException)
-                        Firebase.crashlytics.log("Test crash triggered by user")
-                        android.widget.Toast.makeText(context, "تم إرسال اختبار العطل إلى Firebase", android.widget.Toast.LENGTH_SHORT).show()
+        if (BuildConfig.DEBUG) {
+            // Test Crash button
+            Surface(Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp),
+                color = Color(0xFFFF5252).copy(alpha = 0.1f), shadowElevation = 1.dp) {
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .clickable {
+                            Log.d("FirebaseTest", "About to trigger test crash for Crashlytics")
+                            val testException = RuntimeException("Test Crash - Firebase Crashlytics Testing")
+                            Firebase.crashlytics.recordException(testException)
+                            Firebase.crashlytics.log("Test crash triggered by user")
+                            android.widget.Toast.makeText(context, "تم إرسال اختبار العطل إلى Firebase", android.widget.Toast.LENGTH_SHORT).show()
+                        }
+                        .padding(18.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text("اختبار العطل",
+                            fontWeight = FontWeight.Bold, fontSize = 15.sp, color = Color(0xFFFF5252))
+                        Spacer(Modifier.height(4.dp))
+                        Text("اضغط هنا لاختبار Firebase Crashlytics",
+                            fontSize = 12.sp, color = Color(0xFFFF5252).copy(alpha = 0.7f))
                     }
-                    .padding(18.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column(Modifier.weight(1f)) {
-                    Text("اختبار العطل",
-                        fontWeight = FontWeight.Bold, fontSize = 15.sp, color = Color(0xFFFF5252))
-                    Spacer(Modifier.height(4.dp))
-                    Text("اضغط هنا لاختبار Firebase Crashlytics",
-                        fontSize = 12.sp, color = Color(0xFFFF5252).copy(alpha = 0.7f))
+                    Icon(Icons.Default.Warning, null, tint = Color(0xFFFF5252))
                 }
-                Icon(Icons.Default.Warning, null, tint = Color(0xFFFF5252))
             }
+            Spacer(Modifier.height(16.dp))
         }
-        Spacer(Modifier.height(16.dp))
 
         // Bug Report button
         Surface(Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp),
