@@ -1,6 +1,7 @@
 <resources>
     <string name="app_name">وميض</string>
     <string name="sending">جارٍ الإرسال&#8230;</string>
+    <string name="receiving">جارٍ الاستلام&#8230;</string>
     <string name="cancel">إلغاء</string>
     <string name="error_no_content">لا يوجد محتوى للإرسال</string>
     <string name="error_no_file">لا يوجد ملف للإرسال</string>
@@ -96,7 +97,8 @@
     <string name="info_pairing_approval">⏳ افتح وميض على الكمبيوتر ووافق على الاقتران</string>
     <string name="error_pairing_rejected">رُفض الاقتران من الكمبيوتر</string>
     <string name="status_saved">تم الحفظ</string>
-    <string name="status_saving_on_pc">جارٍ الحفظ على الكمبيوتر&#8230;</string>
+    <string name="status_saving_on_pc">جارٍ الإرسال&#8230;</string>
+    <string name="status_waiting_for_pc_buffer">جارٍ الإرسال&#8230;</string>
     <string name="error_save_failed">فشل الحفظ على الكمبيوتر</string>
     <string name="status_sent">تم الإرسال</string>
     <string name="error_connect_failed">تعذر الاتصال بالكمبيوتر. تأكد أن برنامج وميض يعمل على الكمبيوتر.</string>

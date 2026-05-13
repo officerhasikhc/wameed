@@ -562,8 +562,7 @@ private fun sendText(
     onDone: () -> Unit
 ) {
     val isUrl = text.startsWith("http://") || text.startsWith("https://")
-    val label = if (isUrl) activity.getString(R.string.sending_url)
-                else activity.getString(R.string.sending_text)
+    val label = activity.getString(R.string.sending)
     val historyLabel = if (isUrl) text.take(60) else activity.getString(R.string.label_text_content)
     val historyType = if (isUrl) "url" else "text/plain"
     onState(SendState.Sending(label = label))
@@ -587,7 +586,7 @@ private fun sendText(
         override fun onProgress(percent: Int, speedMbps: Double) =
             onState(SendState.Sending(label = label, percent = percent, speedMbps = speedMbps))
         override fun onInfo(message: String) =
-            onState(SendState.Sending(label = message, percent = 0))
+            onState(SendState.Sending(label = label, percent = 0))
     })
 }
 
@@ -599,8 +598,7 @@ private fun sendSingleFile(
     onState: (SendState) -> Unit,
     onDone: () -> Unit
 ) {
-    val typeLabel = mimeToLabel(mime, activity)
-    val label = activity.getString(R.string.sending_type, typeLabel)
+    val label = activity.getString(R.string.sending)
     val filename = activity.getFilenameFromUri(uri)
     val fileSize = activity.getFileSize(uri)
     onState(SendState.Sending(label = label))
@@ -622,7 +620,7 @@ private fun sendSingleFile(
         override fun onProgress(percent: Int, speedMbps: Double) =
             onState(SendState.Sending(label = label, percent = percent, speedMbps = speedMbps))
         override fun onInfo(message: String) =
-            onState(SendState.Sending(label = message, percent = 0))
+            onState(SendState.Sending(label = label, percent = 0))
     })
 }
 
@@ -645,7 +643,7 @@ private fun sendMultiple(
             return
         }
 
-        val progressLabel = activity.getString(R.string.sending_progress, index + 1, total)
+        val progressLabel = activity.getString(R.string.sending)
         onState(SendState.Sending(
             label = progressLabel,
             currentIndex = index + 1,
@@ -685,7 +683,7 @@ private fun sendMultiple(
                 )
             )
             override fun onInfo(message: String) = onState(
-                SendState.Sending(label = message, currentIndex = index + 1, total = total)
+                SendState.Sending(label = progressLabel, currentIndex = index + 1, total = total)
             )
         })
     }

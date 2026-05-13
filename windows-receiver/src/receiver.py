@@ -164,6 +164,8 @@ translations = {
         "preparing": "جاري التحضير...",
         "sending_progress": "⏳ جاري الإرسال...",
         "sending_file": "إرسال ({idx}/{total}): {name}",
+        "receiving_progress": "⏳ جاري الاستلام...",
+        "receiving_detail": "{percent}% • {speed} Mbps",
         "saving_file": "جاري الحفظ: {name}...",
         "retry_connect": "إعادة محاولة الاتصال ({attempt}/{max})... افتح التطبيق",
         "found_devices": "✅ تم العثور على {count} جهاز",
@@ -282,6 +284,8 @@ translations = {
         "preparing": "Preparing...",
         "sending_progress": "⏳ Sending...",
         "sending_file": "Sending ({idx}/{total}): {name}",
+        "receiving_progress": "⏳ Receiving...",
+        "receiving_detail": "{percent}% • {speed} Mbps",
         "saving_file": "Saving: {name}...",
         "retry_connect": "Retrying ({attempt}/{max})... Open the app",
         "found_devices": "✅ Found {count} device(s)",
@@ -721,6 +725,29 @@ class WameedApp:
 
         self._update_status_display()
 
+        self.receive_status_frame = tk.Frame(inner, bg="#F8FAFC")
+        self.receive_progress_var = tk.DoubleVar(value=0)
+        self.receive_progress_bar = ttk.Progressbar(
+            self.receive_status_frame,
+            orient="horizontal",
+            mode="determinate",
+            variable=self.receive_progress_var
+        )
+        self.receive_progress_label = tk.Label(
+            self.receive_status_frame,
+            text=t("receiving_progress"),
+            bg="#F8FAFC",
+            font=(FONT_AR, fs(9), "bold"),
+            fg="#2E7D32"
+        )
+        self.receive_progress_detail = tk.Label(
+            self.receive_status_frame,
+            text="",
+            bg="#F8FAFC",
+            font=(FONT_AR, fs(8)),
+            fg="#64748B"
+        )
+
         # متغير IP مخفي (يُستخدم داخلياً فقط، لا يُعرض في الصفحة الرئيسية)
         self.home_ip_var = tk.StringVar(value=state.get("target_ip", ""))
         def on_ip_change(*args):
@@ -867,6 +894,39 @@ class WameedApp:
         if not hasattr(self, '_last_logged_status') or self._last_logged_status != new_status:
             self._last_logged_status = new_status
             logger.info(f"🔄 تحديث الحالة: {new_status}")
+
+    def _show_receive_progress(self, filename):
+        if not hasattr(self, "receive_status_frame"):
+            return
+        self.receive_progress_var.set(0)
+        self.receive_progress_label.config(text=t("receiving_progress"))
+        self.receive_progress_detail.config(text=filename)
+        if not self.receive_status_frame.winfo_ismapped():
+            self.receive_status_frame.pack(fill="x", pady=(12, 0))
+            self.receive_progress_label.pack(anchor="e" if LANG == "ar" else "w")
+            self.receive_progress_bar.pack(fill="x", pady=(6, 3))
+            self.receive_progress_detail.pack(anchor="e" if LANG == "ar" else "w")
+
+    def _update_receive_progress(self, percent, speed_mbps):
+        if not hasattr(self, "receive_status_frame"):
+            return
+        percent = max(0, min(100, int(percent)))
+        self.receive_progress_var.set(percent)
+        self.receive_progress_label.config(text=t("receiving_progress"))
+        self.receive_progress_detail.config(
+            text=t("receiving_detail").format(percent=percent, speed=f"{speed_mbps:.1f}")
+        )
+
+    def _hide_receive_progress(self, delay=1800):
+        if not hasattr(self, "receive_status_frame"):
+            return
+        def _hide():
+            try:
+                self.receive_status_frame.pack_forget()
+                self.receive_progress_var.set(0)
+            except Exception:
+                pass
+        self.root.after(delay, _hide)
 
     def _check_firewall_on_startup(self):
         """فحص Firewall عند أول تشغيل — يكتشف إذا كان TCP 7788 محجوباً من الشبكة المحلية"""
@@ -3343,6 +3403,7 @@ async def handle_client(websocket, path=None):
 
                     logger.info(f"بدء استقبال ملف: {filename} ({fsize} bytes) | عدد الأجزاء: {chunks} | transfer={transfer_id}")
                     start_time = time.time()
+                    app.root.after(0, lambda n=filename: app._show_receive_progress(n))
 
                     try:
                         free_bytes = shutil.disk_usage(save_dir).free
@@ -3383,6 +3444,11 @@ async def handle_client(websocket, path=None):
                                 received += len(chunk)
                                 received_chunks += 1
                                 now = time.time()
+                                if fsize > 0:
+                                    pct = min(99, int(received * 100 / fsize))
+                                    elapsed = max(0.001, now - start_time)
+                                    speed_mbps = (received * 8.0) / (1024.0 * 1024.0 * elapsed)
+                                    app.root.after(0, lambda p=pct, s=speed_mbps: app._update_receive_progress(p, s))
                                 if received_chunks % 8 == 0 or now - last_ack >= 1:
                                     await _send_transfer_status(
                                         websocket,
@@ -3412,6 +3478,8 @@ async def handle_client(websocket, path=None):
 
                         elapsed = time.time() - start_time
                         logger.info(f"تم استقبال الملف بنجاح: {filename} في {elapsed:.2f} ثانية")
+                        app.root.after(0, lambda: app._update_receive_progress(100, 0.0))
+                        app.root.after(0, app._hide_receive_progress)
 
                         await _send_transfer_status(
                             websocket,
@@ -3445,6 +3513,7 @@ async def handle_client(websocket, path=None):
                             reason=reason,
                             message=str(exc),
                         )
+                        app.root.after(0, lambda: app._hide_receive_progress(0))
                         raise
 
                     # الأعمال الثانوية بعد الرد (لا تؤخر الهاتف)

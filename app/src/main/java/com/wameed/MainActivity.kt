@@ -199,6 +199,10 @@ fun MainScreen(sender: WameedSender, discovery: DeviceDiscovery, updateManager: 
     var currentFileSpeed by remember { mutableStateOf(0.0) }
     var currentFileName by remember { mutableStateOf("") }
     var currentInfoStatus by remember { mutableStateOf("") }
+    var isReceivingFile by remember { mutableStateOf(false) }
+    var receivingFileName by remember { mutableStateOf("") }
+    var receivingProgress by remember { mutableIntStateOf(0) }
+    var receivingSpeed by remember { mutableStateOf(0.0) }
     
     // Update management logic is handled inside UpdateIntegration
 
@@ -278,7 +282,7 @@ fun MainScreen(sender: WameedSender, discovery: DeviceDiscovery, updateManager: 
             override fun onInfo(message: String) {
                 Log.i("MainActivity", "ℹ️ معلومة: $message")
                 mainHandler.post {
-                    currentInfoStatus = message
+                    currentInfoStatus = ""
                 }
             }
         })
@@ -509,6 +513,31 @@ fun MainScreen(sender: WameedSender, discovery: DeviceDiscovery, updateManager: 
                 is WameedEvent.ReceiverStatus -> {
                     receivingReady = event.isReady
                 }
+                is WameedEvent.ReceiveMeta -> {
+                    isReceivingFile = true
+                    receivingFileName = event.filename
+                    receivingProgress = 0
+                    receivingSpeed = 0.0
+                }
+                is WameedEvent.ReceiveProgress -> {
+                    isReceivingFile = true
+                    receivingProgress = event.percent.coerceIn(0, 99)
+                    receivingSpeed = event.speedMbps
+                }
+                is WameedEvent.ReceiveComplete -> {
+                    receivingProgress = 100
+                    receivingSpeed = 0.0
+                    delay(1600)
+                    isReceivingFile = false
+                    receivingFileName = ""
+                    receivingProgress = 0
+                }
+                is WameedEvent.ReceiveError -> {
+                    isReceivingFile = false
+                    receivingFileName = ""
+                    receivingProgress = 0
+                    receivingSpeed = 0.0
+                }
                 else -> Unit
             }
         }
@@ -629,16 +658,31 @@ fun MainScreen(sender: WameedSender, discovery: DeviceDiscovery, updateManager: 
     // Update integration
     UpdateIntegration(updateManager, context)
 
-    if (isSendingBatch) {
+    if (isSendingBatch || isReceivingFile) {
         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.BottomCenter) {
-            BatchProgressOverlay(
-                currentFile = currentFileIndex,
-                totalFiles = totalFilesCount,
-                progress = currentFileProgress,
-                speed = currentFileSpeed,
-                fileName = currentFileName,
-                infoStatus = currentInfoStatus
-            )
+            Column {
+                if (isReceivingFile) {
+                    BatchProgressOverlay(
+                        label = stringResource(R.string.receiving),
+                        currentFile = 1,
+                        totalFiles = 1,
+                        progress = receivingProgress,
+                        speed = receivingSpeed,
+                        fileName = receivingFileName
+                    )
+                }
+                if (isSendingBatch) {
+                    BatchProgressOverlay(
+                        label = stringResource(R.string.sending),
+                        currentFile = currentFileIndex,
+                        totalFiles = totalFilesCount,
+                        progress = currentFileProgress,
+                        speed = currentFileSpeed,
+                        fileName = currentFileName,
+                        infoStatus = currentInfoStatus
+                    )
+                }
+            }
         }
     }
 
@@ -1733,6 +1777,7 @@ fun StatusCard(
 
 @Composable
 fun BatchProgressOverlay(
+    label: String,
     currentFile: Int,
     totalFiles: Int,
     progress: Int,
@@ -1757,11 +1802,19 @@ fun BatchProgressOverlay(
             ) {
                 Column {
                     Text(
-                        text = stringResource(R.string.sending_progress, currentFile, totalFiles),
+                        text = label,
                         fontWeight = FontWeight.ExtraBold,
                         fontSize = 15.sp,
                         color = Color(0xFF2E7D32)
                     )
+                    if (totalFiles > 1) {
+                        Text(
+                            text = "$currentFile / $totalFiles",
+                            fontSize = 12.sp,
+                            color = Color.Gray,
+                            fontWeight = FontWeight.Medium
+                        )
+                    }
                     if (infoStatus.isNotEmpty()) {
                         Text(
                             text = infoStatus,

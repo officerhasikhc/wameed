@@ -1,6 +1,7 @@
 <resources>
     <string name="app_name">Wameed</string>
     <string name="sending">Sending&#8230;</string>
+    <string name="receiving">Receiving&#8230;</string>
     <string name="cancel">Cancel</string>
     <string name="error_no_content">No content to send</string>
     <string name="error_no_file">No file to send</string>
@@ -96,7 +97,8 @@
     <string name="info_pairing_approval">⏳ Open Wameed on PC and approve the pairing</string>
     <string name="error_pairing_rejected">Pairing rejected by PC</string>
     <string name="status_saved">Saved</string>
-    <string name="status_saving_on_pc">Saving on PC&#8230;</string>
+    <string name="status_saving_on_pc">Sending&#8230;</string>
+    <string name="status_waiting_for_pc_buffer">Sending&#8230;</string>
     <string name="error_save_failed">Save failed on PC</string>
     <string name="status_sent">Sent</string>
     <string name="error_connect_failed">Could not connect to PC. Make sure Wameed is running on the PC.</string>
@@ -183,4 +185,53 @@
     <string name="checking_updates">Checking...</string>
     <string name="app_up_to_date">Latest version installed ✓</string>
     <string name="status_connected_to">Connected to {name}</string>
+    <string name="status_waiting_for_approval">⏳ Waiting for pairing approval on the PC&#8230;</string>
+    <string name="status_pairing_pending">Waiting for pairing</string>
+    <string name="status_pairing_rejected">Pairing rejected</string>
+    <string name="error_pairing_timeout">Pairing timed out — no response from the PC</string>
+    <string name="pairing_approval_hint">Open Wameed on the PC and press "Yes" to allow the connection</string>
+    <string name="error_too_many_files">You cannot select more than 10 files</string>
+    <string name="attached_files">Attached files (%d)</string>
+    <string name="send_all">Send all</string>
+
+    <!-- Diagnostics and network tools -->
+    <string name="diag_log_title">Diagnostic Log</string>
+    <string name="diag_log_detail">View events and errors for remote diagnostics</string>
+    <string name="diag_share_log">📤 Share log</string>
+    <string name="diag_clear_log">🗑️ Clear log</string>
+    <string name="diag_filter_all">All</string>
+    <string name="diag_filter_errors">Errors</string>
+    <string name="diag_filter_network">Network</string>
+    <string name="diag_filter_warnings">Warnings</string>
+    <string name="diag_empty_log">Log is empty</string>
+    <string name="diag_net_title">Network Diagnostics</string>
+    <string name="diag_net_detail">Check connectivity and diagnose issues</string>
+    <string name="diag_run_tests">▶ Run tests</string>
+    <string name="diag_running">Running tests&#8230;</string>
+    <string name="diag_wifi_info">Wi-Fi information</string>
+    <string name="diag_test_udp">UDP Discovery test</string>
+    <string name="diag_test_tcp">TCP test</string>
+    <string name="diag_test_ping">ICMP Ping test</string>
+    <string name="diag_test_ws">WebSocket test</string>
+    <string name="diag_passed">✅ Passed (%dms)</string>
+    <string name="diag_failed">❌ Failed: %s</string>
+    <string name="diag_share_results">📤 Share results</string>
+    <string name="diag_fix_hint">🔧 Diagnose issue</string>
+
+    <!-- Updates -->
+    <string name="update_available">Update available</string>
+    <string name="update_downloading">Downloading...</string>
+    <string name="update_installing">Installing...</string>
+    <string name="update_description">A newer version is available with improvements and new features.</string>
+    <string name="update_downloading_desc">The update is downloading. Please wait...</string>
+    <string name="update_installing_desc">The update is installing. The app will restart soon.</string>
+    <string name="update_later">Later</string>
+    <string name="update_now">Update now</string>
+    <string name="update_close">Close</string>
+    <string name="update_failed">Update failed. Please try again.</string>
+    <string name="update_success">Updated successfully ✓</string>
+    <string name="update_notification">🔄 Update available</string>
+    <string name="update_notification_desc">A newer version is available</string>
+    <string name="update_dismiss">Dismiss</string>
+    <string name="update_progress">%d%%</string>
 </resources>
