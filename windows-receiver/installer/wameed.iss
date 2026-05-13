@@ -71,7 +71,7 @@ Name: "{userstartup}\{#AppName}"; Filename: "{app}\{#AppExe}"; Tasks: autostart
 Filename: "netsh"; Parameters: "advfirewall firewall add rule name=""Wameed WS"" dir=in action=allow protocol=TCP localport=7788";  Flags: runhidden; Tasks: firewall
 Filename: "netsh"; Parameters: "advfirewall firewall add rule name=""Wameed Discovery"" dir=in action=allow protocol=UDP localport=7789"; Flags: runhidden; Tasks: firewall
 ; Optionally launch after install
-Filename: "{app}\{#AppExe}"; Description: "{cm:LaunchNow}"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\{#AppExe}"; Description: "{cm:LaunchNow}"; WorkingDir: "{app}"; Flags: nowait postinstall skipifsilent
 
 [UninstallRun]
 Filename: "netsh"; Parameters: "advfirewall firewall delete rule name=""Wameed WS""";        Flags: runhidden

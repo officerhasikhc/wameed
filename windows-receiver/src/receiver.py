@@ -2090,14 +2090,18 @@ $Installer = {ps_quote(installer_path)}
 $CurrentExe = {ps_quote(current_exe)}
 $FallbackExe = {ps_quote(fallback_exe)}
 try {{ Wait-Process -Id $PidToWait -Timeout 20 }} catch {{}}
-try {{ Get-Process -Name 'Wameed' -ErrorAction SilentlyContinue | Stop-Process -Force }} catch {{}}
-$InstallArgs = '/SILENT /SUPPRESSMSGBOXES /CLOSEAPPLICATIONS /RESTARTAPPLICATIONS'
+$InstallArgs = '/SILENT /SUPPRESSMSGBOXES /CLOSEAPPLICATIONS /NORESTART'
 try {{ Start-Process -FilePath $Installer -ArgumentList $InstallArgs -Verb RunAs -Wait }} catch {{ exit 1 }}
 Start-Sleep -Seconds 2
+$LaunchExe = $null
 if (($CurrentExe.ToLower().EndsWith('.exe')) -and (Test-Path $CurrentExe)) {{
-    Start-Process -FilePath $CurrentExe
+    $LaunchExe = $CurrentExe
 }} elseif (Test-Path $FallbackExe) {{
-    Start-Process -FilePath $FallbackExe
+    $LaunchExe = $FallbackExe
+}}
+if ($LaunchExe) {{
+    $LaunchDir = Split-Path -Parent $LaunchExe
+    Start-Process -FilePath $LaunchExe -WorkingDirectory $LaunchDir
 }}
 """
             with open(script_path, "w", encoding="utf-8") as script_file:

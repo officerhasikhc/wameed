@@ -57,24 +57,6 @@ fun SplashScreen(onFinished: () -> Unit) {
     // during recomposition.
     val startAnim = remember { mutableStateOf(false) }
 
-    // Logo scale: dramatic bounce effect
-    val scale by animateFloatAsState(
-        targetValue = if (startAnim.value) 1f else 0.2f,
-        animationSpec = spring(
-            dampingRatio = 0.4f, 
-            stiffness = 400f,
-            visibilityThreshold = 0.01f
-        ),
-        label = "scale"
-    )
-
-    // Logo alpha: smooth fade in
-    val alpha by animateFloatAsState(
-        targetValue = if (startAnim.value) 1f else 0f,
-        animationSpec = tween(800, easing = EaseOutCubic),
-        label = "alpha"
-    )
-
     // Multi-layer dramatic flash effect
     val flashAlpha by animateFloatAsState(
         targetValue = if (startAnim.value) 0f else 1f,
@@ -149,24 +131,11 @@ fun SplashScreen(onFinished: () -> Unit) {
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center
         ) {
-            // App name with dramatic entrance
-            Text(
-                text = stringResource(R.string.app_name),
-                color = Color.White,
-                fontSize = 42.sp, // أكبر قليلاً
-                fontWeight = FontWeight.ExtraBold,
-                modifier = Modifier
-                    .scale(scale)
-                    .alpha(alpha)
-            )
-
-            Spacer(modifier = Modifier.height(8.dp))
-
             Text(
                 text = stringResource(R.string.about_detail),
                 color = Color.White.copy(alpha = 0.8f),
-                fontSize = 16.sp,
-                fontWeight = FontWeight.Medium,
+                fontSize = 24.sp,
+                fontWeight = FontWeight.SemiBold,
                 modifier = Modifier
                     .alpha(textAlpha)
                     .scale(textScale)
