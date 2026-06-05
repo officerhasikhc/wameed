@@ -78,6 +78,7 @@ class T:
     SURFACE = "#FFFFFF"
     SURFACE_DIM = "#F8FAFC"
     TEXT_PRIMARY = "#1E293B"
+    TEXT = TEXT_PRIMARY
     TEXT_SECOND = "#64748B"
     TEXT_MUTED = "#94A3B8"
     SUCCESS = "#22C55E"
@@ -245,7 +246,10 @@ translations = {
         "update_confirm_install": "سيتم إغلاق وميض وتشغيل المثبت لاستبدال النسخة الحالية. متابعة؟",
         "update_close": "إغلاق",
         "update_manifest_invalid": "ملف التحديث لا يحتوي على بيانات ويندوز صالحة.",
-        "firewall_blocked_msg": "يبدو أن Windows Firewall يحجب منفذ TCP 7788 المطلوب لاستقبال الملفات من الهاتف.\n\nهل تريد إضافة قاعدة Firewall تلقائياً؟ (يتطلب صلاحية المدير)"
+        "firewall_blocked_msg": "يبدو أن Windows Firewall يحجب منفذ TCP 7788 المطلوب لاستقبال الملفات من الهاتف.\n\nهل تريد إضافة قاعدة Firewall تلقائياً؟ (يتطلب صلاحية المدير)",
+        "diag_send_test_report": "إرسال تقرير اختبار",
+        "diag_test_report_sent": "تم تسجيل تقرير اختبار.\nالمعرّف: {report_id}",
+        "diag_test_report_not_sent": "تم حفظ تقرير الاختبار محلياً فقط.\nأضف sentryDsn في version.properties لتفعيل الإرسال."
     },
     "en": {
         "app_header": "Wameed",
@@ -366,7 +370,10 @@ translations = {
         "update_confirm_install": "Wameed will close and start the installer to replace the current version. Continue?",
         "update_close": "Close",
         "update_manifest_invalid": "The update file does not contain valid Windows update data.",
-        "firewall_blocked_msg": "Windows Firewall appears to be blocking TCP port 7788 required to receive files from the phone.\n\nWould you like to add a firewall rule automatically? (Requires administrator permission)"
+        "firewall_blocked_msg": "Windows Firewall appears to be blocking TCP port 7788 required to receive files from the phone.\n\nWould you like to add a firewall rule automatically? (Requires administrator permission)",
+        "diag_send_test_report": "Send Test Report",
+        "diag_test_report_sent": "Test report recorded.\nID: {report_id}",
+        "diag_test_report_not_sent": "The test report was saved locally only.\nAdd sentryDsn in version.properties to enable uploads."
     }
 }
 
@@ -378,9 +385,10 @@ def t(key):
 APP_DATA_DIR = os.path.join(os.path.expanduser("~"), ".wameed")
 os.makedirs(APP_DATA_DIR, exist_ok=True)
 
-# Local Logs Directory (as requested for easier debugging)
+# Local Logs Directory. Keep it outside the installed/program folder so logs
+# survive upgrades and PyInstaller extraction cleanup.
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-LOCAL_LOG_DIR = os.path.join(SCRIPT_DIR, "logs")
+LOCAL_LOG_DIR = os.path.join(APP_DATA_DIR, "logs")
 os.makedirs(LOCAL_LOG_DIR, exist_ok=True)
 LOG_FILE = os.path.join(LOCAL_LOG_DIR, "receiver.log")
 
@@ -409,6 +417,7 @@ def _sanitize_for_telemetry(value):
     text = re.sub(r"\b(\d{1,3}\.\d{1,3}\.\d{1,3})\.\d{1,3}\b", r"\1.x", text)
     text = re.sub(r"([A-Za-z]:\\Users\\)[^\\\r\n]+", r"\1<user>", text)
     text = re.sub(r"(/home/)[^/\r\n]+", r"\1<user>", text)
+    text = re.sub(r"(content://)[^\s\r\n]+", r"\1<redacted>", text)
     return text[:900]
 
 def _sanitize_event(obj):
@@ -458,12 +467,43 @@ def init_sentry():
 
 SENTRY_ENABLED = init_sentry()
 
-def report_windows_issue(category, exc=None, level="error", **context):
-    safe_context = {str(k): _sanitize_for_telemetry(v) for k, v in context.items()}
+def _new_report_id():
+    seed = f"{socket.gethostname()}:{VERSION}:{time.time()}".encode("utf-8", errors="ignore")
+    return "wmw-" + hashlib.sha256(seed).hexdigest()[:16]
+
+def _network_summary():
+    return f"local={_sanitize_for_telemetry(get_local_ip())};ws={PORT_WS};udp={PORT_UDP};version={VERSION}"
+
+def _flush_sentry(timeout=3):
+    if SENTRY_ENABLED and sentry_sdk is not None:
+        try:
+            sentry_sdk.flush(timeout=timeout)
+        except Exception as exc:
+            logger.debug(f"Sentry flush failed: {exc}")
+
+def report_windows_issue(category, exc=None, level="error", flush=False, **context):
+    report_id = str(context.pop("report_id", "") or _new_report_id())
+    operation = str(context.pop("operation", category))
+    phase = str(context.pop("phase", "unknown"))
+    error_type = type(exc).__name__ if exc is not None else str(context.pop("error_type", "message"))
+    sanitized_message = _sanitize_for_telemetry(exc if exc is not None else context.get("message", category))
+    base_context = {
+        "report_id": report_id,
+        "app_version": VERSION,
+        "platform": "windows",
+        "operation": operation,
+        "phase": phase,
+        "error_type": error_type,
+        "sanitized_message": sanitized_message,
+        "network_summary": _network_summary(),
+    }
+    base_context.update(context)
+    safe_context = {str(k): _sanitize_for_telemetry(v) for k, v in base_context.items()}
+    report_windows_issue.last_report_id = report_id
     if exc is not None:
-        logger.debug(f"Telemetry issue {category}: {type(exc).__name__}: {_sanitize_for_telemetry(exc)}")
+        logger.debug(f"Telemetry issue {category} [{report_id}]: {type(exc).__name__}: {_sanitize_for_telemetry(exc)}")
     else:
-        logger.debug(f"Telemetry issue {category}: {safe_context}")
+        logger.debug(f"Telemetry issue {category} [{report_id}]: {safe_context}")
 
     if not SENTRY_ENABLED or sentry_sdk is None:
         return None
@@ -472,28 +512,38 @@ def report_windows_issue(category, exc=None, level="error", **context):
         with sentry_sdk.push_scope() as scope:
             scope.set_tag("wameed.category", category)
             scope.set_tag("wameed.level", level)
+            scope.set_tag("wameed.report_id", report_id)
+            scope.set_tag("wameed.operation", operation)
+            scope.set_tag("wameed.phase", phase)
             for key, value in safe_context.items():
                 if len(value) <= 120:
                     scope.set_tag(f"wameed.{key}", value)
             scope.set_context("wameed", safe_context)
             if exc is not None:
-                return sentry_sdk.capture_exception(exc)
+                event_id = sentry_sdk.capture_exception(exc)
             else:
-                return sentry_sdk.capture_message(category, level=level)
+                event_id = sentry_sdk.capture_message(category, level=level)
+            if flush:
+                _flush_sentry(timeout=3)
+            return event_id
     except Exception as telemetry_exc:
         logger.debug(f"Sentry capture failed: {telemetry_exc}")
     return None
 
-def show_error_report_dialog(category, exc, event_id=None, parent=None):
+report_windows_issue.last_report_id = None
+
+def show_error_report_dialog(category, exc, event_id=None, report_id=None, parent=None):
     """Show a compact user-facing report notice after serious failures."""
     try:
         sentry_line = (
             f"تم إرسال التقرير إلى Sentry.\nEvent ID: {event_id}"
             if event_id else
-            "تم حفظ التفاصيل في سجل التشخيص المحلي. لم يتم إرسالها لأن Sentry غير مهيأ."
+            "تم حفظ التفاصيل في سجل التشخيص المحلي. لم يتم إرسالها لأن Sentry غير مهيأ أو تعذر الوصول إليه."
         )
+        report_line = report_id or report_windows_issue.last_report_id or "local-only"
         message = (
             f"حدث خطأ في وميض.\n\n"
+            f"معرّف التقرير: {report_line}\n"
             f"النوع: {type(exc).__name__}\n"
             f"القسم: {category}\n\n"
             f"{sentry_line}\n\n"
@@ -511,7 +561,13 @@ def install_global_exception_hooks():
 
     def sys_hook(exc_type, exc, tb):
         logger.exception("Unhandled Python exception", exc_info=(exc_type, exc, tb))
-        event_id = report_windows_issue("unhandled_app_error", exc)
+        event_id = report_windows_issue(
+            "unhandled_app_error",
+            exc,
+            flush=True,
+            operation="app",
+            phase="sys_excepthook",
+        )
         show_error_report_dialog("unhandled_app_error", exc, event_id=event_id)
         if previous_sys_hook:
             previous_sys_hook(exc_type, exc, tb)
@@ -524,6 +580,9 @@ def install_global_exception_hooks():
         report_windows_issue(
             "unhandled_thread_error",
             args.exc_value,
+            flush=True,
+            operation="thread",
+            phase=getattr(args.thread, "name", "unknown"),
             thread=getattr(args.thread, "name", "unknown")
         )
         if previous_thread_hook:
@@ -1860,6 +1919,8 @@ class WameedApp:
                             variant="secondary", width=120).pack(side="right" if LANG=="ar" else "left", padx=3, pady=3)
         self._modern_button(diag_frame, text=t("diag_net_btn"), command=self._show_network_diagnostics,
                             variant="secondary", width=120).pack(side="right" if LANG=="ar" else "left", padx=3, pady=3)
+        self._modern_button(diag_frame, text=t("diag_send_test_report"), command=self._send_test_report,
+                            variant="secondary", width=140).pack(side="right" if LANG=="ar" else "left", padx=3, pady=3)
         self._modern_button(diag_frame, text=t("firewall_copy"), command=self._copy_firewall_commands,
                             variant="muted", width=120).pack(side="right" if LANG=="ar" else "left", padx=3, pady=3)
         self._modern_button(diag_frame, text=t("firewall_fix"), command=self._run_firewall_fix,
@@ -1871,6 +1932,22 @@ class WameedApp:
                 callback()
         except Exception:
             pass
+
+    def _send_test_report(self):
+        report_id = _new_report_id()
+        event_id = report_windows_issue(
+            "report_test",
+            level="info",
+            flush=True,
+            report_id=report_id,
+            operation="diagnostics",
+            phase="manual_test",
+            message="manual windows report test",
+        )
+        if event_id:
+            messagebox.showinfo(APP_NAME, t("diag_test_report_sent").format(report_id=report_id))
+        else:
+            messagebox.showwarning(APP_NAME, t("diag_test_report_not_sent"))
 
     def _version_tuple(self, value):
         parts = []
@@ -2104,7 +2181,13 @@ class WameedApp:
                     post(lambda: show_result(update_info))
                 except Exception as exc:
                     logger.exception("Windows update check failed")
-                    report_windows_issue("update_check_failed", exc, url=UPDATE_JSON_URL)
+                    report_windows_issue(
+                        "update_check_failed",
+                        exc,
+                        operation="update",
+                        phase="check",
+                        url=UPDATE_JSON_URL,
+                    )
                     post(lambda error=exc: show_error(error))
 
             threading.Thread(target=worker, daemon=True).start()
@@ -2252,6 +2335,8 @@ class WameedApp:
                 report_windows_issue(
                     "update_download_failed",
                     exc,
+                    operation="update",
+                    phase="download",
                     url=info.get("updateUrl", ""),
                     remote_version=info.get("version", ""),
                 )
@@ -2306,7 +2391,14 @@ if ($LaunchExe) {{
             self.quit_app()
         except Exception as exc:
             logger.exception("Failed to launch update installer")
-            event_id = report_windows_issue("update_install_launch_failed", exc, installer=installer_path)
+            event_id = report_windows_issue(
+                "update_install_launch_failed",
+                exc,
+                flush=True,
+                operation="update",
+                phase="install_launch",
+                installer=installer_path,
+            )
             show_error_report_dialog("update_install_launch_failed", exc, event_id=event_id, parent=dialog)
             messagebox.showerror(t("update_failed"), str(exc), parent=dialog)
 
@@ -2550,6 +2642,8 @@ if ($LaunchExe) {{
         ).pack(side="right" if LANG=="ar" else "left", padx=3)
         self._modern_button(btn_bar, text=t("diag_copy_results"), command=copy_results,
                             variant="muted", width=130).pack(side="right" if LANG=="ar" else "left", padx=3)
+        self._modern_button(btn_bar, text=t("diag_send_test_report"), command=self._send_test_report,
+                            variant="secondary", width=140).pack(side="right" if LANG=="ar" else "left", padx=3)
         self._modern_button(btn_bar, text=t("firewall_copy"), command=self._copy_firewall_commands,
                             variant="secondary", width=120).pack(side="right" if LANG=="ar" else "left", padx=3)
         self._modern_button(btn_bar, text=t("firewall_fix"), command=self._run_firewall_fix,
@@ -2591,7 +2685,7 @@ if ($LaunchExe) {{
             logger.info(f"Firewall fix launched with elevation script: {script_path}")
         except Exception as e:
             logger.error(f"Failed to run firewall fix: {e}")
-            report_windows_issue("firewall_fix_failed", e)
+            report_windows_issue("firewall_fix_failed", e, operation="network", phase="firewall_fix")
             messagebox.showerror(t("error"), str(e))
 
     def _broadcast_discovery(self, timeout=2.0):
@@ -2706,7 +2800,14 @@ if ($LaunchExe) {{
 
             if not self._verify_device_connection(ip, timeout=2.0):
                 logger.warning(f"⚠️ Preflight failed before sending to {ip}: TCP 7789 is not reachable")
-                report_windows_issue("send_preflight_failed", level="warning", target_ip=ip, target_port=7789)
+                report_windows_issue(
+                    "send_preflight_failed",
+                    level="warning",
+                    operation="send",
+                    phase="preflight",
+                    target_ip=ip,
+                    target_port=7789,
+                )
                 device_info = {
                     "id": connected_device.get("id", "") if connected_device else "",
                     "name": device_name or (connected_device.get("name") if connected_device else ip),
@@ -3125,7 +3226,15 @@ if ($LaunchExe) {{
 
             except Exception as e:
                 logger.error(f"❌ خطأ في إرسال الملفات إلى {ip}: {type(e).__name__}: {e}")
-                report_windows_issue("send_files_failed", e, target_ip=ip, target_port=7789, file_count=len(files))
+                report_windows_issue(
+                    "send_files_failed",
+                    e,
+                    operation="send",
+                    phase="files",
+                    target_ip=ip,
+                    target_port=7789,
+                    file_count=len(files),
+                )
                 error_msg = str(e)
                 if "121" in error_msg: error_msg = "خطأ في الشبكة (Timeout) - تحقق من اتصال WiFi"
                 elif "1225" in error_msg or "ConnectionRefused" in type(e).__name__: error_msg = "الهاتف رفض الاتصال - تأكد من فتح التطبيق وتفعيل الاستقبال"
@@ -3198,7 +3307,15 @@ if ($LaunchExe) {{
 
             except Exception as e:
                 logger.error(f"خطأ في إرسال النص: {e}")
-                report_windows_issue("send_text_failed", e, target_ip=ip, target_port=7789, text_length=len(text))
+                report_windows_issue(
+                    "send_text_failed",
+                    e,
+                    operation="send",
+                    phase="text",
+                    target_ip=ip,
+                    target_port=7789,
+                    text_length=len(text),
+                )
                 window.after(0, lambda: self._show_inline_message(window, f"❌ فشل الإرسال: {str(e)[:40]}", "#EF4444"))
 
         asyncio.run(send_text_task())
@@ -3679,6 +3796,7 @@ async def handle_client(websocket, path=None):
                         report_windows_issue(
                             "receive_file_failed",
                             exc,
+                            operation="receive",
                             direction="android_to_windows",
                             phase="receive",
                             transfer_id=transfer_id,
@@ -3715,7 +3833,14 @@ async def handle_client(websocket, path=None):
 
             except Exception as e:
                 logger.exception("حدث خطأ أثناء معالجة رسالة العميل")
-                report_windows_issue("ws_message_failed", e, client_ip=client_ip, message_type=locals().get("mtype", "unknown"))
+                report_windows_issue(
+                    "ws_message_failed",
+                    e,
+                    operation="receive",
+                    phase="ws_message",
+                    client_ip=client_ip,
+                    message_type=locals().get("mtype", "unknown"),
+                )
     except Exception as e:
         logger.debug(f"انتهى اتصال WebSocket مع ({client_ip}): {e}")
 
@@ -3959,5 +4084,11 @@ if __name__ == "__main__":
         app.run()
     except Exception as e:
         logger.exception("حدث خطأ فادح أدى لتوقف التطبيق")
-        event_id = report_windows_issue("fatal_app_error", e)
+        event_id = report_windows_issue(
+            "fatal_app_error",
+            e,
+            flush=True,
+            operation="fatal",
+            phase="app_start_or_run",
+        )
         show_error_report_dialog("fatal_app_error", e, event_id=event_id)

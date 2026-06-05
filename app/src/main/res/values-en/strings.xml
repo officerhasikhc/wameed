@@ -189,11 +189,13 @@
     <string name="bug_report_success">Report sent. Thank you.</string>
     <string name="bug_report_failed">Could not send the report. Please try again.</string>
     <string name="bug_report_empty">Please describe the problem</string>
-    <string name="crash_report_title">Crash Report Sent</string>
-    <string name="crash_report_message">Wameed stopped unexpectedly during the previous run. The technical report was sent automatically to Crashlytics for analysis. Type: %1$s\nDetails: %2$s</string>
+    <string name="crash_report_title">Previous Crash Recorded</string>
+    <string name="crash_report_message">Wameed stopped unexpectedly during the previous run. The report was saved and an automatic Crashlytics upload was requested.\nReport ID: %1$s\nType: %2$s\nDetails: %3$s</string>
     <string name="crash_report_add_details">Add Details</string>
     <string name="crash_report_later">Later</string>
-    <string name="crash_report_prefill">Previous crash report\nType: %1$s\nThread: %2$s\nMessage: %3$s\n\nWhat were you doing before the problem happened?</string>
+    <string name="crash_report_prefill">Previous crash report\nReport ID: %1$s\nType: %2$s\nThread: %3$s\nMessage: %4$s\n\nWhat were you doing before the problem happened?</string>
+    <string name="diag_send_test_report">Send Test Report</string>
+    <string name="diag_test_report_sent">Test report recorded. ID: %1$s</string>
     <string name="check_for_updates">Check for Updates</string>
     <string name="checking_updates">Checking...</string>
     <string name="app_up_to_date">Latest version installed ✓</string>

@@ -7,6 +7,7 @@ import android.net.Uri
 import android.os.Build
 import android.util.Log
 import androidx.core.content.FileProvider
+import com.google.firebase.perf.FirebasePerformance
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONObject
@@ -82,6 +83,11 @@ class WameedUpdateManager private constructor(private val context: Context) {
         }
         isChecking = true
         if (isManual) _updateState.value = UpdateState.Checking
+        val trace = FirebasePerformance.getInstance().newTrace("wameed_update_check").apply {
+            putAttribute("app_version", BuildConfig.VERSION_NAME)
+            putAttribute("manual", isManual.toString())
+            start()
+        }
 
         return withContext(Dispatchers.IO) {
             try {
@@ -136,7 +142,9 @@ class WameedUpdateManager private constructor(private val context: Context) {
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "✗ Exception during update check: ${e.javaClass.simpleName}: ${e.message}", e)
-                crashReporter.recordNonFatal(
+                crashReporter.recordOperationFailure(
+                    operation = "update",
+                    phase = "check",
                     category = "update_failed",
                     message = "check_failed: ${e.javaClass.simpleName}: ${e.message}",
                     throwable = e,
@@ -149,6 +157,7 @@ class WameedUpdateManager private constructor(private val context: Context) {
                 }
                 false
             } finally {
+                trace.stop()
                 isChecking = false
             }
         }
@@ -163,6 +172,10 @@ class WameedUpdateManager private constructor(private val context: Context) {
             return
         }
         Log.w(TAG, "▶ بدء تنزيل APK من: $url")
+        val trace = FirebasePerformance.getInstance().newTrace("wameed_update_download").apply {
+            putAttribute("app_version", BuildConfig.VERSION_NAME)
+            start()
+        }
 
         withContext(Dispatchers.IO) {
             try {
@@ -229,13 +242,17 @@ class WameedUpdateManager private constructor(private val context: Context) {
 
             } catch (e: Exception) {
                 Log.e(TAG, "✗ خطأ أثناء تنزيل التحديث: ${e.message}", e)
-                crashReporter.recordNonFatal(
+                crashReporter.recordOperationFailure(
+                    operation = "update",
+                    phase = "download",
                     category = "update_failed",
                     message = "download_failed: ${e.javaClass.simpleName}: ${e.message}",
                     throwable = e,
                     throttleMs = 120_000L
                 )
                 _updateState.value = UpdateState.Failed(-1)
+            } finally {
+                trace.stop()
             }
         }
     }
@@ -275,8 +292,10 @@ class WameedUpdateManager private constructor(private val context: Context) {
             _updateState.value = UpdateState.Idle
         } catch (e: Exception) {
             Log.e(TAG, "✗ فشل فتح التثبيت: ${e.message}", e)
-            crashReporter.recordNonFatal(
-                category = "update_failed",
+            crashReporter.recordOperationFailure(
+                operation = "update",
+                phase = "install_intent",
+                category = "install_failed",
                 message = "install_intent_failed: ${e.javaClass.simpleName}: ${e.message}",
                 throwable = e,
                 throttleMs = 120_000L

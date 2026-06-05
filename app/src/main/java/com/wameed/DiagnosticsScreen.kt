@@ -33,6 +33,7 @@ import com.wameed.ui.components.WameedBadge
 import com.wameed.ui.components.WameedCard
 import com.wameed.ui.components.WameedEmptyState
 import com.wameed.ui.components.WameedPrimaryButton
+import com.wameed.ui.components.WameedSecondaryButton
 import com.wameed.ui.components.WameedTextAction
 import com.wameed.ui.theme.WameedError
 import com.wameed.ui.theme.WameedGreen
@@ -339,6 +340,19 @@ fun NetworkDiagScreen(onBack: () -> Unit) {
                 onClick = { runDiagnostics() },
                 enabled = !isRunning,
                 loading = isRunning
+            )
+
+            WameedSecondaryButton(
+                text = stringResource(R.string.diag_send_test_report),
+                onClick = {
+                    val reportId = WameedCrashReporter.getInstance().sendTestReport(context, "network_diagnostics")
+                    Toast.makeText(
+                        context,
+                        context.getString(R.string.diag_test_report_sent, reportId),
+                        Toast.LENGTH_LONG
+                    ).show()
+                },
+                enabled = !isRunning
             )
 
             if (wifiInfo.isNotEmpty()) {

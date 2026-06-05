@@ -706,6 +706,7 @@ fun MainScreen(sender: WameedSender, discovery: DeviceDiscovery, updateManager: 
                 Text(
                     stringResource(
                         R.string.crash_report_message,
+                        report.reportId,
                         report.type,
                         report.message.ifBlank { report.thread }
                     )
@@ -715,6 +716,7 @@ fun MainScreen(sender: WameedSender, discovery: DeviceDiscovery, updateManager: 
                 Button(onClick = {
                     val description = context.getString(
                         R.string.crash_report_prefill,
+                        report.reportId,
                         report.type,
                         report.thread,
                         report.message.ifBlank { "no message" }

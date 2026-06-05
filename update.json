@@ -1,14 +1,14 @@
 {
     "android":  {
-                    "versionCode":  24,
-                    "versionName":  "2.0.4",
-                    "updateUrl":  "https://github.com/officerhasikhc/wameed/releases/download/2.0.4/Wameed-Android.apk",
+                    "versionCode":  25,
+                    "versionName":  "2.0.5",
+                    "updateUrl":  "https://github.com/officerhasikhc/wameed/releases/download/2.0.5/Wameed-Android.apk",
                     "isForceUpdate":  false,
-                    "releaseNotes":  "?????? ?????? (?????? ?????? ?????????)?? framework"
+                    "releaseNotes":  "ubdate for catch errors"
                 },
     "windows":  {
-                    "version":  "2.0.4",
-                    "updateUrl":  "https://github.com/officerhasikhc/wameed/releases/download/2.0.4/WameedSetup-2.0.4.exe",
-                    "releaseNotes":  "?????? ?????? (?????? ?????? ?????????)?? framework"
+                    "version":  "2.0.5",
+                    "updateUrl":  "https://github.com/officerhasikhc/wameed/releases/download/2.0.5/WameedSetup-2.0.5.exe",
+                    "releaseNotes":  "ubdate for catch errors"
                 }
 }

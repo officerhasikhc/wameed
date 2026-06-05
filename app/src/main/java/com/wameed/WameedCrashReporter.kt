@@ -7,6 +7,7 @@ import android.util.Log
 import com.google.firebase.Firebase
 import com.google.firebase.analytics.analytics
 import com.google.firebase.crashlytics.crashlytics
+import com.google.firebase.crashlytics.CustomKeysAndValues
 import com.wameed.BuildConfig
 import java.security.MessageDigest
 import java.util.Locale
@@ -31,6 +32,7 @@ class WameedCrashReporter private constructor() {
         private const val KEY_CRASH_MESSAGE = "crash_message"
         private const val KEY_CRASH_THREAD = "crash_thread"
         private const val KEY_CRASH_TIME = "crash_time"
+        private const val KEY_CRASH_REPORT_ID = "crash_report_id"
 
         @Volatile
         private var INSTANCE: WameedCrashReporter? = null
@@ -115,6 +117,7 @@ class WameedCrashReporter private constructor() {
     }
 
     data class PendingCrashReport(
+        val reportId: String,
         val type: String,
         val message: String,
         val thread: String,
@@ -126,6 +129,7 @@ class WameedCrashReporter private constructor() {
         if (!prefs.getBoolean(KEY_PENDING_CRASH, false)) return null
 
         val report = PendingCrashReport(
+            reportId = prefs.getString(KEY_CRASH_REPORT_ID, "unknown") ?: "unknown",
             type = prefs.getString(KEY_CRASH_TYPE, "Unknown") ?: "Unknown",
             message = prefs.getString(KEY_CRASH_MESSAGE, "") ?: "",
             thread = prefs.getString(KEY_CRASH_THREAD, "") ?: "",
@@ -134,6 +138,7 @@ class WameedCrashReporter private constructor() {
 
         prefs.edit()
             .putBoolean(KEY_PENDING_CRASH, false)
+            .remove(KEY_CRASH_REPORT_ID)
             .apply()
 
         return report
@@ -155,6 +160,53 @@ class WameedCrashReporter private constructor() {
         if (failureType.isNotBlank()) {
             crashlytics.setCustomKey("transfer_failure_type", failureType.take(40))
         }
+    }
+
+    fun recordOperationFailure(
+        operation: String,
+        phase: String,
+        category: String,
+        message: String,
+        throwable: Throwable? = null,
+        networkSummary: String = "",
+        throttleMs: Long = 60_000L
+    ): String {
+        return recordNonFatal(
+            category = category,
+            message = message,
+            throwable = throwable,
+            throttleMs = throttleMs,
+            operation = operation,
+            phase = phase,
+            networkSummary = networkSummary
+        )
+    }
+
+    fun sendTestReport(context: Context, source: String = "diagnostics"): String {
+        refreshContext(context)
+        val reportId = newReportId(context)
+        val message = "manual_report_test from $source"
+        crashlytics.log("REPORT_TEST[$reportId]: $message")
+        logEvent("report_test_sent", Bundle().apply {
+            putString("report_id", reportId)
+            putString("source", source.take(40))
+            putString("platform", "android")
+            putString("app_version", BuildConfig.VERSION_NAME)
+        })
+        crashlytics.recordException(
+            WameedNonFatalException("report_test: $message"),
+            buildEventKeys(
+                reportId = reportId,
+                category = "report_test",
+                message = message,
+                throwableName = "WameedNonFatalException",
+                operation = "diagnostics",
+                phase = "manual_test",
+                networkSummary = safeNetworkSummary(context)
+            )
+        )
+        crashlytics.sendUnsentReports()
+        return reportId
     }
 
     /**
@@ -196,7 +248,7 @@ class WameedCrashReporter private constructor() {
         val throttleMs = when (category) {
             "persistent_ws_disconnect" -> 10 * 60_000L
             "pairing_timeout" -> 2 * 60_000L
-            "firewall_suspected" -> 5 * 60_000L
+            "firewall_or_network_suspected" -> 5 * 60_000L
             else -> 60_000L
         }
 
@@ -215,7 +267,9 @@ class WameedCrashReporter private constructor() {
             category = category,
             message = "$tag: $message",
             throwable = throwable,
-            throttleMs = throttleMs
+            throttleMs = throttleMs,
+            operation = operationForCategory(category),
+            phase = tag.take(40)
         )
     }
 
@@ -223,11 +277,23 @@ class WameedCrashReporter private constructor() {
         val text = "$tag $message".lowercase(Locale.US)
         return when {
             text.contains("pairing") || text.contains("اقتران") -> "pairing_timeout"
-            text.contains("firewall") || text.contains("جدار") || text.contains("محجوب") -> "firewall_suspected"
+            text.contains("firewall") || text.contains("جدار") || text.contains("محجوب") -> "firewall_or_network_suspected"
             text.contains("update") || text.contains("تحديث") || text.contains("install") -> "update_failed"
+            text.contains("receive") || text.contains("استلام") || text.contains("مستلم") -> "receive_failed"
             text.contains("persistent ws") || text.contains("ws failure") || text.contains("websocket") -> "persistent_ws_disconnect"
             text.contains("send") || text.contains("إرسال") || text.contains("ارسال") -> "send_failed"
             else -> "app_log_error"
+        }
+    }
+
+    private fun operationForCategory(category: String): String {
+        return when (category) {
+            "send_failed" -> "send"
+            "receive_failed" -> "receive"
+            "update_failed", "install_failed" -> "update"
+            "firewall_or_network_suspected" -> "network"
+            "persistent_ws_disconnect", "network_log_failure", "pairing_timeout" -> "connection"
+            else -> "app"
         }
     }
 
@@ -243,29 +309,48 @@ class WameedCrashReporter private constructor() {
         category: String,
         message: String,
         throwable: Throwable? = null,
-        throttleMs: Long = 60_000L
-    ) {
+        throttleMs: Long = 60_000L,
+        operation: String = category,
+        phase: String = "unknown",
+        networkSummary: String = ""
+    ): String {
         val key = "$category:${message.take(160)}:${throwable?.javaClass?.name.orEmpty()}"
         val now = System.currentTimeMillis()
         val last = lastRecordedAt[key] ?: 0L
-        if (now - last < throttleMs) return
+        val reportId = newReportId(null)
+        if (now - last < throttleMs) return reportId
         lastRecordedAt[key] = now
 
         val safeMessage = message.take(900)
+        val throwableName = throwable?.javaClass?.simpleName?.take(80) ?: "WameedNonFatalException"
         crashlytics.setCustomKey("last_nonfatal_category", category.take(40))
         crashlytics.setCustomKey("last_nonfatal_message", safeMessage.take(180))
-        crashlytics.setCustomKey("last_nonfatal_throwable", throwable?.javaClass?.simpleName?.take(80) ?: "none")
-        crashlytics.log("NON_FATAL[$category]: $safeMessage")
+        crashlytics.setCustomKey("last_nonfatal_throwable", throwableName)
+        crashlytics.setCustomKey("last_report_id", reportId)
+        crashlytics.log("NON_FATAL[$category][$reportId]: $safeMessage")
 
         logEvent("wameed_nonfatal", Bundle().apply {
+            putString("report_id", reportId)
             putString("category", category.take(40))
             putString("message", safeMessage.take(100))
-            putString("throwable", throwable?.javaClass?.simpleName?.take(40) ?: "none")
+            putString("throwable", throwableName.take(40))
+            putString("operation", operation.take(40))
+            putString("phase", phase.take(40))
         })
 
         crashlytics.recordException(
-            throwable ?: WameedNonFatalException("$category: $safeMessage")
+            throwable ?: WameedNonFatalException("$category: $safeMessage"),
+            buildEventKeys(
+                reportId = reportId,
+                category = category,
+                message = safeMessage,
+                throwableName = throwableName,
+                operation = operation,
+                phase = phase,
+                networkSummary = networkSummary
+            )
         )
+        return reportId
     }
 
     fun logEvent(name: String, params: Bundle? = null) {
@@ -297,20 +382,36 @@ class WameedCrashReporter private constructor() {
      */
     fun reportUserIssue(context: Context, description: String, email: String = "") {
         refreshContext(context)
+        val reportId = newReportId(context)
+        val safeDescription = sanitizeForTelemetry(description)
+        crashlytics.setCustomKey("last_report_id", reportId)
         setCustomKey("user_reported_issue", "true")
-        setCustomKey("user_description", description.take(180))
+        setCustomKey("user_description", safeDescription.take(180))
         if (email.isNotEmpty()) {
             setCustomKey("user_email", email.take(80))
         }
         attachRecentLogs()
-        log("User reported issue: ${description.take(900)}")
+        log("User reported issue [$reportId]: ${safeDescription.take(900)}")
         
         // إرسال Exception فعلي حتى يظهر في Firebase Console
-        crashlytics.recordException(UserReportedIssueException(description.take(900)))
+        crashlytics.recordException(
+            UserReportedIssueException(safeDescription.take(900)),
+            buildEventKeys(
+                reportId = reportId,
+                category = "user_report",
+                message = safeDescription,
+                throwableName = "UserReportedIssueException",
+                operation = "diagnostics",
+                phase = "user_report",
+                networkSummary = safeNetworkSummary(context)
+            )
+        )
+        crashlytics.sendUnsentReports()
         
         // تسجيل الحدث في Analytics أيضاً
         Firebase.analytics.logEvent("user_bug_report", Bundle().apply {
-            putString("description", description.take(100))
+            putString("report_id", reportId)
+            putString("description", safeDescription.take(100))
             putString("email", email.take(80))
         })
     }
@@ -351,15 +452,24 @@ class WameedCrashReporter private constructor() {
             Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
                 try {
                     refreshContext(context)
+                    val reportId = newReportId(context)
+                    val networkSummary = safeNetworkSummary(context)
+                    crashlytics.setCustomKey("report_id", reportId)
+                    crashlytics.setCustomKey("operation", "fatal")
+                    crashlytics.setCustomKey("phase", "uncaught_exception")
+                    crashlytics.setCustomKey("error_type", throwable.javaClass.simpleName.take(80))
+                    crashlytics.setCustomKey("network_summary", networkSummary)
                     crashlytics.setCustomKey("fatal_thread", thread.name.take(80))
                     crashlytics.setCustomKey("fatal_type", throwable.javaClass.simpleName.take(80))
                     crashlytics.setCustomKey("fatal_message", (throwable.message ?: "").take(180))
-                    crashlytics.log("FATAL[${thread.name}]: ${throwable.javaClass.simpleName}: ${(throwable.message ?: "").take(500)}")
+                    crashlytics.log("FATAL[$reportId][${thread.name}]: ${throwable.javaClass.simpleName}: ${(throwable.message ?: "").take(500)}")
                     attachRecentLogs()
+                    crashlytics.sendUnsentReports()
 
                     context.getSharedPreferences(CRASH_PREFS, Context.MODE_PRIVATE)
                         .edit()
                         .putBoolean(KEY_PENDING_CRASH, true)
+                        .putString(KEY_CRASH_REPORT_ID, reportId)
                         .putString(KEY_CRASH_TYPE, throwable.javaClass.simpleName.take(80))
                         .putString(KEY_CRASH_MESSAGE, (throwable.message ?: "").take(240))
                         .putString(KEY_CRASH_THREAD, thread.name.take(80))
@@ -377,6 +487,44 @@ class WameedCrashReporter private constructor() {
             }
             uncaughtHandlerInstalled = true
         }
+    }
+
+    private fun buildEventKeys(
+        reportId: String,
+        category: String,
+        message: String,
+        throwableName: String,
+        operation: String,
+        phase: String,
+        networkSummary: String
+    ): CustomKeysAndValues {
+        return CustomKeysAndValues.Builder()
+            .putString("report_id", reportId.take(48))
+            .putString("app_version", BuildConfig.VERSION_NAME)
+            .putString("platform", "android")
+            .putString("operation", operation.take(40))
+            .putString("phase", phase.take(40))
+            .putString("error_type", throwableName.take(80))
+            .putString("category", category.take(40))
+            .putString("sanitized_message", sanitizeForTelemetry(message).take(180))
+            .putString("network_summary", networkSummary.take(180))
+            .build()
+    }
+
+    private fun newReportId(context: Context?): String {
+        val installPart = context?.let { hashInstallId(it) } ?: "local"
+        return "wm-${System.currentTimeMillis().toString(16)}-${installPart.take(8)}"
+    }
+
+    private fun safeNetworkSummary(context: Context): String {
+        return "pc=${maskPrivateIp(WameedPrefs.getPcIp(context))}:${WameedPrefs.getPcPort(context)};configured=${WameedPrefs.isConfigured(context)};keepAlive=${WameedPrefs.isKeepAliveEnabled(context)}"
+    }
+
+    private fun sanitizeForTelemetry(value: String): String {
+        return value
+            .replace(Regex("""\b(\d{1,3}\.\d{1,3}\.\d{1,3})\.\d{1,3}\b"""), "\$1.x")
+            .replace(Regex("""/storage/emulated/\d+/[^ \n\r]+"""), "/storage/emulated/<user-file>")
+            .replace(Regex("""content://[^ \n\r]+"""), "content://<redacted>")
     }
 
     private class WameedNonFatalException(message: String) : Exception(message)

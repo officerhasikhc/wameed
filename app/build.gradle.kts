@@ -6,7 +6,7 @@ plugins {
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.google.services)
     alias(libs.plugins.crashlytics)
-    // alias(libs.plugins.firebase.perf)
+    alias(libs.plugins.firebase.perf)
 }
 
 // Load keystore properties from local file
