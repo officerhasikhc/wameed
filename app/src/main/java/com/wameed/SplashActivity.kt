@@ -103,10 +103,10 @@ fun SplashScreen(onFinished: () -> Unit) {
             .background(
                 Brush.verticalGradient(
                     colors = listOf(
-                        Color(0xFF0D47A1), // أزرق داكن في الأعلى
-                        Color(0xFF1B5E20), // أخضر داكن في المنتصف
-                        Color(0xFF2E7D32), // أخضر متوسط
-                        Color(0xFF388E3C)  // أخضر فاتح في الأسفل
+                        Color(0xFFF1F8F4),
+                        Color(0xFFE8F5E9),
+                        Color(0xFF43A047),
+                        Color(0xFF2E7D32)
                     )
                 )
             ),
@@ -133,7 +133,7 @@ fun SplashScreen(onFinished: () -> Unit) {
         ) {
             Text(
                 text = stringResource(R.string.about_detail),
-                color = Color.White.copy(alpha = 0.8f),
+                color = Color(0xFF1B5E20),
                 fontSize = 24.sp,
                 fontWeight = FontWeight.SemiBold,
                 modifier = Modifier

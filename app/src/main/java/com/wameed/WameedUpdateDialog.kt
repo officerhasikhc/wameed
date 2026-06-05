@@ -16,6 +16,19 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
+import com.wameed.ui.components.PulsingDot
+import com.wameed.ui.components.WameedCard
+import com.wameed.ui.components.WameedPrimaryButton
+import com.wameed.ui.components.WameedProgressBar
+import com.wameed.ui.components.WameedSecondaryButton
+import com.wameed.ui.components.WameedTextAction
+import com.wameed.ui.theme.WameedError
+import com.wameed.ui.theme.WameedGreen
+import com.wameed.ui.theme.WameedGreen95
+import com.wameed.ui.theme.WameedInfo
+import com.wameed.ui.theme.WameedTextPrimary
+import com.wameed.ui.theme.WameedTextSecondary
+import com.wameed.ui.theme.WameedWarning
 
 /**
  * حوار تحديث التطبيق مع شريط تقدم
@@ -30,29 +43,24 @@ fun WameedUpdateDialog(
 ) {
     if (isVisible) {
         Dialog(onDismissRequest = onDismiss) {
-            Card(
+            WameedCard(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(16.dp),
-                shape = RoundedCornerShape(16.dp),
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.surface
-                )
+                contentPadding = PaddingValues(24.dp)
             ) {
                 Column(
-                    modifier = Modifier.padding(24.dp),
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.spacedBy(16.dp)
                 ) {
-                    // أيقونة التحديث
-                    Icon(
-                        imageVector = if (updateState is UpdateState.Downloading || updateState is UpdateState.Installing) 
-                            Icons.Default.Download 
-                        else 
-                            Icons.Default.Update,
-                        contentDescription = null,
-                        modifier = Modifier.size(48.dp),
-                        tint = MaterialTheme.colorScheme.primary
+                    PulsingDot(
+                        color = when (updateState) {
+                            is UpdateState.Failed -> WameedError
+                            is UpdateState.Downloading, is UpdateState.Installing -> WameedInfo
+                            else -> WameedGreen
+                        },
+                        pulsing = updateState is UpdateState.Downloading || updateState is UpdateState.Installing,
+                        size = 14.dp
                     )
                     
                     // العنوان
@@ -65,7 +73,7 @@ fun WameedUpdateDialog(
                         },
                         fontSize = 20.sp,
                         fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onSurface
+                        color = WameedTextPrimary
                     )
                     
                     // الوصف
@@ -78,7 +86,7 @@ fun WameedUpdateDialog(
                         },
                         fontSize = 14.sp,
                         textAlign = TextAlign.Center,
-                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+                        color = WameedTextSecondary,
                         lineHeight = 20.sp
                     )
                     
@@ -88,19 +96,12 @@ fun WameedUpdateDialog(
                             modifier = Modifier.fillMaxWidth(),
                             verticalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            LinearProgressIndicator(
-                                progress = { updateState.progress },
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(8.dp),
-                                color = MaterialTheme.colorScheme.primary,
-                                trackColor = MaterialTheme.colorScheme.primaryContainer
-                            )
+                            WameedProgressBar(progress = updateState.progress)
                             
                             Text(
                                 text = "${(updateState.progress * 100).toInt()}%",
                                 fontSize = 12.sp,
-                                color = MaterialTheme.colorScheme.primary,
+                                color = WameedGreen,
                                 fontWeight = FontWeight.Medium
                             )
                         }
@@ -109,7 +110,8 @@ fun WameedUpdateDialog(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .height(8.dp),
-                            color = MaterialTheme.colorScheme.primary
+                            color = WameedGreen,
+                            trackColor = WameedGreen95
                         )
                     }
                     
@@ -120,21 +122,17 @@ fun WameedUpdateDialog(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.spacedBy(12.dp)
                             ) {
-                                OutlinedButton(
+                                WameedSecondaryButton(
+                                    text = "لاحقاً",
                                     onClick = onUpdateDeclined,
-                                    modifier = Modifier.weight(1f),
-                                    shape = RoundedCornerShape(12.dp)
-                                ) {
-                                    Text("لاحقاً", fontSize = 14.sp)
-                                }
+                                    modifier = Modifier.weight(1f)
+                                )
                                 
-                                Button(
+                                WameedPrimaryButton(
+                                    text = "تحديث الآن",
                                     onClick = onUpdateAccepted,
-                                    modifier = Modifier.weight(1f),
-                                    shape = RoundedCornerShape(12.dp)
-                                ) {
-                                    Text("تحديث الآن", fontSize = 14.sp)
-                                }
+                                    modifier = Modifier.weight(1f)
+                                )
                             }
                         }
                         
@@ -150,28 +148,24 @@ fun WameedUpdateDialog(
                                 Text(
                                     text = "تعذر التحديث، حاول لاحقاً",
                                     fontSize = 12.sp,
-                                    color = MaterialTheme.colorScheme.error,
+                                    color = WameedError,
                                     textAlign = TextAlign.Center
                                 )
                                 
-                                Button(
+                                WameedPrimaryButton(
+                                    text = "إغلاق",
                                     onClick = onDismiss,
-                                    modifier = Modifier.fillMaxWidth(),
-                                    shape = RoundedCornerShape(12.dp)
-                                ) {
-                                    Text("إغلاق", fontSize = 14.sp)
-                                }
+                                    modifier = Modifier.fillMaxWidth()
+                                )
                             }
                         }
                         
                         else -> {
-                            Button(
+                            WameedPrimaryButton(
+                                text = "إغلاق",
                                 onClick = onDismiss,
-                                modifier = Modifier.fillMaxWidth(),
-                                shape = RoundedCornerShape(12.dp)
-                            ) {
-                                Text("إغلاق", fontSize = 14.sp)
-                            }
+                                modifier = Modifier.fillMaxWidth()
+                            )
                         }
                     }
                 }
@@ -191,51 +185,47 @@ fun WameedUpdateNotification(
     onDismiss: () -> Unit
 ) {
     if (isVisible) {
-        Card(
+        WameedCard(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 16.dp, vertical = 8.dp),
-            colors = CardDefaults.cardColors(
-                containerColor = MaterialTheme.colorScheme.primaryContainer
-            ),
-            shape = RoundedCornerShape(12.dp)
+            contentPadding = PaddingValues(16.dp)
         ) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(16.dp),
+                    .padding(0.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
+                PulsingDot(color = WameedGreen, size = 10.dp)
+                Spacer(Modifier.width(10.dp))
                 Column(
                     modifier = Modifier.weight(1f)
                 ) {
                     Text(
-                        text = "🔄 تحديث جديد",
+                        text = "تحديث جديد",
                         fontSize = 14.sp,
                         fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onPrimaryContainer
+                        color = WameedTextPrimary
                     )
                     
                     Text(
                         text = message,
                         fontSize = 12.sp,
-                        color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f)
+                        color = WameedTextSecondary
                     )
                 }
                 
                 Row(
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    TextButton(
-                        onClick = onDismiss
-                    ) {
-                        Text("تجاهل", fontSize = 12.sp)
-                    }
+                    WameedTextAction(text = "تجاهل", onClick = onDismiss, color = WameedTextSecondary)
                     
                     Button(
                         onClick = onUpdateClick,
-                        shape = RoundedCornerShape(8.dp)
+                        shape = RoundedCornerShape(18.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = WameedGreen)
                     ) {
                         Text("تحديث", fontSize = 12.sp)
                     }

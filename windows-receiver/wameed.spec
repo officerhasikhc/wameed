@@ -1,15 +1,18 @@
 # -*- mode: python ; coding: utf-8 -*-
-from PyInstaller.utils.hooks import collect_submodules
+from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 
 hiddenimports = ['websockets.legacy.server', 'websockets.legacy.protocol']
 hiddenimports += collect_submodules('websockets')
+hiddenimports += collect_submodules('customtkinter')
+datas = [('src\\wameed.ico', '.'), ('..\\version.properties', '.')]
+datas += collect_data_files('customtkinter')
 
 
 a = Analysis(
     ['src\\receiver.py'],
     pathex=[],
     binaries=[],
-    datas=[('src\\wameed.ico', '.'), ('..\\version.properties', '.')],
+    datas=datas,
     hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},

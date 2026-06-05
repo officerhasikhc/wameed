@@ -11,11 +11,21 @@ import threading
 import time
 import shutil
 import hashlib
+import errno
 from datetime import datetime
 from urllib.parse import urlparse
 import tkinter as tk
 from tkinter import messagebox, filedialog, ttk
 from PIL import Image, ImageTk
+
+try:
+    import customtkinter as ctk
+    CUSTOMTKINTER_AVAILABLE = True
+    ctk.set_appearance_mode("light")
+    ctk.set_default_color_theme("green")
+except ImportError:
+    ctk = None
+    CUSTOMTKINTER_AVAILABLE = False
 
 # محاولة استيراد مكتبة السحب والإفلات
 try:
@@ -57,6 +67,28 @@ APP_NAME = "وميض (Wameed)"
 PORT_WS = 7788
 PORT_UDP = 7789
 
+
+class T:
+    GREEN = "#2E7D32"
+    GREEN_LIGHT = "#43A047"
+    GREEN_DARK = "#1B5E20"
+    GREEN_95 = "#E8F5E9"
+    GREEN_HOVER = "#256528"
+    MINT = "#F1F8F4"
+    SURFACE = "#FFFFFF"
+    SURFACE_DIM = "#F8FAFC"
+    TEXT_PRIMARY = "#1E293B"
+    TEXT_SECOND = "#64748B"
+    TEXT_MUTED = "#94A3B8"
+    SUCCESS = "#22C55E"
+    WARNING = "#F59E0B"
+    ERROR = "#EF4444"
+    INFO = "#3B82F6"
+    BORDER = "#E2E8F0"
+    BORDER_SOFT = "#F1F5F9"
+    FONT_FAMILY = "Cairo"
+    FONT_FALLBACK = "Segoe UI"
+
 # ======================== Font Configuration ========================
 # خط عربي احترافي مع fallback
 def _detect_arabic_font():
@@ -66,7 +98,7 @@ def _detect_arabic_font():
     _root.withdraw()
     available = _root.tk.call("font", "families")
     _root.destroy()
-    for candidate in ("Sakkal Majalla", "Arabic Typesetting", "Traditional Arabic", "Simplified Arabic"):
+    for candidate in ("Cairo", "Sakkal Majalla", "Arabic Typesetting", "Traditional Arabic", "Simplified Arabic"):
         if candidate in available:
             return candidate
     return "Segoe UI"
@@ -207,6 +239,7 @@ translations = {
         "update_download_start": "بدء تنزيل التحديث...",
         "update_download_progress": "{percent}% - {done} من {total} ({speed}/ث)",
         "update_download_unknown": "{done} تم تنزيلها ({speed}/ث)",
+        "update_no_space": "لا توجد مساحة كافية لإكمال التحديث.\n\nالمتاح: {free}\nالمطلوب تقريباً: {required}\n\nحرّر مساحة من القرص ثم أعد المحاولة.",
         "update_installing": "جاري تشغيل المثبت. سيتم إغلاق وميض لإكمال الاستبدال.",
         "update_ready_restart": "تم تنزيل التحديث. سيتم إغلاق وميض وتشغيل المثبت.",
         "update_confirm_install": "سيتم إغلاق وميض وتشغيل المثبت لاستبدال النسخة الحالية. متابعة؟",
@@ -327,6 +360,7 @@ translations = {
         "update_download_start": "Starting update download...",
         "update_download_progress": "{percent}% - {done} of {total} ({speed}/s)",
         "update_download_unknown": "{done} downloaded ({speed}/s)",
+        "update_no_space": "There is not enough disk space to complete the update.\n\nAvailable: {free}\nRequired approx.: {required}\n\nFree up disk space, then try again.",
         "update_installing": "Starting the installer. Wameed will close to finish replacing the app.",
         "update_ready_restart": "The update was downloaded. Wameed will close and start the installer.",
         "update_confirm_install": "Wameed will close and start the installer to replace the current version. Continue?",
@@ -630,8 +664,9 @@ class WameedApp:
             self.root = tk.Tk()
 
         self.root.title(APP_NAME)
-        self.root.geometry("480x580")
-        self.root.configure(bg="#F8FAFC")
+        self.root.geometry("520x680")
+        self.root.minsize(480, 600)
+        self.root.configure(bg=T.MINT)
         self.root.protocol("WM_DELETE_WINDOW", self.hide_window)
 
         self.icon_path = get_resource_path("wameed.ico")
@@ -644,39 +679,101 @@ class WameedApp:
         self.setup_ui()
         self.setup_tray()
 
+    def _modern_button(self, master, text, command=None, variant="primary", width=None, **kwargs):
+        palette = {
+            "primary": (T.GREEN, "white", T.GREEN_HOVER),
+            "secondary": ("transparent", T.GREEN, T.GREEN_95),
+            "danger": ("transparent", T.ERROR, "#FEE2E2"),
+            "muted": (T.SURFACE_DIM, T.TEXT_SECOND, T.GREEN_95),
+        }
+        bg, fg, hover = palette.get(variant, palette["primary"])
+        if CUSTOMTKINTER_AVAILABLE:
+            border_color = T.GREEN if variant == "secondary" else (T.ERROR if variant == "danger" else bg)
+            return ctk.CTkButton(
+                master,
+                text=text,
+                command=command,
+                fg_color=bg,
+                hover_color=hover,
+                text_color=fg,
+                font=(FONT_AR, fs(10), "bold" if variant == "primary" else "normal"),
+                corner_radius=22,
+                height=42,
+                width=width or 120,
+                border_width=1 if variant in ("secondary", "danger") else 0,
+                border_color=border_color,
+                **kwargs,
+            )
+        return tk.Button(
+            master,
+            text=text,
+            command=command,
+            bg=bg if bg != "transparent" else T.SURFACE,
+            fg=fg,
+            activebackground=hover,
+            activeforeground=fg,
+            relief="flat",
+            bd=0,
+            font=(FONT_AR, fs(10), "bold" if variant == "primary" else "normal"),
+            padx=14,
+            pady=8,
+            **kwargs,
+        )
+
+    def _modern_card(self, master, selected=False, **kwargs):
+        if CUSTOMTKINTER_AVAILABLE:
+            return ctk.CTkFrame(
+                master,
+                fg_color=T.SURFACE,
+                border_color=T.GREEN if selected else T.BORDER_SOFT,
+                border_width=2 if selected else 1,
+                corner_radius=18,
+                **kwargs,
+            )
+        return tk.Frame(
+            master,
+            bg=T.SURFACE,
+            highlightthickness=2 if selected else 1,
+            highlightbackground=T.GREEN if selected else T.BORDER_SOFT,
+            **kwargs,
+        )
+
     def setup_ui(self):
         for w in self.root.winfo_children(): w.destroy()
 
-        # --- Header with Logo ---
-        hdr = tk.Frame(self.root, bg="#2E7D32", height=75)
+        # --- Header ---
+        hdr = tk.Frame(self.root, bg=T.MINT, height=72)
         hdr.pack(fill="x")
         hdr.pack_propagate(False)
 
-        # شعار "وميض" مع أيقونة البرق
-        header_frame = tk.Frame(hdr, bg="#2E7D32")
+        header_frame = tk.Frame(hdr, bg=T.MINT)
         header_frame.pack(expand=True)
 
-        # أيقونة البرق
-        self.lightning_label = tk.Label(header_frame, text="⚡", bg="#2E7D32", fg="#FFD700",
-                                        font=(FONT_AR, 24))
-        self.lightning_label.pack(side="right" if LANG=="ar" else "left", padx=5)
-
-        # نص "وميض"
-        tk.Label(header_frame, text=t("app_header"), bg="#2E7D32", fg="white",
-                 font=(FONT_AR, fs(22), "bold")).pack(side="right" if LANG=="ar" else "left", padx=5)
+        tk.Label(
+            header_frame,
+            text=t("app_header"),
+            bg=T.MINT,
+            fg=T.GREEN,
+            font=(FONT_AR, fs(22), "bold")
+        ).pack(padx=5)
 
         # --- Style ---
         style = ttk.Style()
-        style.configure("TNotebook", background="#F8FAFC")
-        style.configure("TNotebook.Tab", font=(FONT_AR, fs(10)), padding=[12, 4])
+        style.configure("TNotebook", background=T.MINT, borderwidth=0)
+        style.configure("TNotebook.Tab", font=(FONT_AR, fs(10)), padding=[16, 7])
+        style.map(
+            "TNotebook.Tab",
+            background=[("selected", T.GREEN_95)],
+            foreground=[("selected", T.GREEN)]
+        )
 
         self.nb = ttk.Notebook(self.root)
-        self.nb.pack(fill="both", expand=True, padx=12, pady=12)
+        self.nb.pack(fill="both", expand=True, padx=14, pady=10)
 
-        self.tab_home = tk.Frame(self.nb, bg="white")
-        self.tab_devices = tk.Frame(self.nb, bg="white")
-        self.tab_history = tk.Frame(self.nb, bg="white")
-        self.tab_settings = tk.Frame(self.nb, bg="white")
+        self.tab_home = tk.Frame(self.nb, bg=T.SURFACE)
+        self.tab_devices = tk.Frame(self.nb, bg=T.SURFACE)
+        self.tab_history = tk.Frame(self.nb, bg=T.SURFACE)
+        self.tab_settings = tk.Frame(self.nb, bg=T.SURFACE)
 
         self.nb.add(self.tab_home, text=t("tab_home"))
         self.nb.add(self.tab_devices, text=t("tab_devices"))
@@ -705,27 +802,27 @@ class WameedApp:
         logger.info(f"✅ تم تشغيل وميض بنجاح | الإصدار: {VERSION} | IP المحلي: {get_local_ip()}")
 
         # --- Bottom Bar ---
-        btm = tk.Frame(self.root, bg="#F1F5F9", height=35)
+        btm = tk.Frame(self.root, bg=T.SURFACE, height=35)
         btm.pack(fill="x", side="bottom")
         tk.Label(btm, text=f"{t('version')} {VERSION} | {get_local_ip()}",
-                 bg="#F1F5F9", fg="#64748B", font=(FONT_AR, fs(9))).pack(pady=6)
+                 bg=T.SURFACE, fg=T.TEXT_SECOND, font=(FONT_AR, fs(9))).pack(pady=6)
 
     def _build_home(self):
         for w in self.tab_home.winfo_children(): w.destroy()
 
         # Status Card - بطاقة الحالة المحسّنة
-        card = tk.Frame(self.tab_home, bg="#F8FAFC", highlightthickness=1, highlightbackground="#E2E8F0")
+        card = self._modern_card(self.tab_home)
         card.pack(fill="x", padx=16, pady=(16, 10))
 
-        inner = tk.Frame(card, bg="#F8FAFC")
+        inner = tk.Frame(card, bg=T.SURFACE)
         inner.pack(padx=16, pady=14, fill="x")
 
-        self.status_frame = tk.Frame(inner, bg="#F8FAFC")
+        self.status_frame = tk.Frame(inner, bg=T.SURFACE)
         self.status_frame.pack(fill="x")
 
         self._update_status_display()
 
-        self.receive_status_frame = tk.Frame(inner, bg="#F8FAFC")
+        self.receive_status_frame = tk.Frame(inner, bg=T.SURFACE)
         self.receive_progress_var = tk.DoubleVar(value=0)
         self.receive_progress_bar = ttk.Progressbar(
             self.receive_status_frame,
@@ -736,16 +833,16 @@ class WameedApp:
         self.receive_progress_label = tk.Label(
             self.receive_status_frame,
             text=t("receiving_progress"),
-            bg="#F8FAFC",
+            bg=T.SURFACE,
             font=(FONT_AR, fs(9), "bold"),
-            fg="#2E7D32"
+            fg=T.GREEN
         )
         self.receive_progress_detail = tk.Label(
             self.receive_status_frame,
             text="",
-            bg="#F8FAFC",
+            bg=T.SURFACE,
             font=(FONT_AR, fs(8)),
-            fg="#64748B"
+            fg=T.TEXT_MUTED
         )
 
         # متغير IP مخفي (يُستخدم داخلياً فقط، لا يُعرض في الصفحة الرئيسية)
@@ -756,45 +853,56 @@ class WameedApp:
         self.home_ip_var.trace_add("write", on_ip_change)
 
         # أزرار الإجراء السريع — صف أفقي
-        quick_frame = tk.Frame(self.tab_home, bg="white")
+        quick_frame = tk.Frame(self.tab_home, bg=T.SURFACE)
         quick_frame.pack(fill="x", padx=16, pady=(0, 8))
 
         # زر الإرسال الرئيسي (بارز)
-        tk.Button(quick_frame, text=f"⚡ {t('btn_send')}", bg="#2E7D32", fg="white",
-                  font=(FONT_AR, fs(12), "bold"), bd=0, pady=12, cursor="hand2",
-                  activebackground="#1B5E20", activeforeground="white",
-                  command=self._show_send_dialog).pack(fill="x", pady=(0, 6))
+        self._modern_button(
+            quick_frame,
+            text=t("btn_send"),
+            command=self._show_send_dialog,
+            variant="primary",
+        ).pack(fill="x", pady=(0, 6))
 
         # صف الأزرار الثانوية
-        sub_btn_frame = tk.Frame(quick_frame, bg="white")
+        sub_btn_frame = tk.Frame(quick_frame, bg=T.SURFACE)
         sub_btn_frame.pack(fill="x")
 
-        search_btn = tk.Button(sub_btn_frame, text=t("btn_search_devices"), bg="#EFF6FF", fg="#2563EB",
-                  font=(FONT_AR, fs(9), "bold"), bd=0, pady=8, cursor="hand2",
-                  activebackground="#DBEAFE", activeforeground="#1D4ED8",
-                  command=self._show_discovery_dialog)
+        search_btn = self._modern_button(
+            sub_btn_frame,
+            text=t("btn_search_devices"),
+            command=self._show_discovery_dialog,
+            variant="secondary",
+            width=120,
+        )
         search_btn.pack(side="left", fill="x", expand=True, padx=(0, 4))
 
-        tk.Button(sub_btn_frame, text=t("manual_connect"), bg="#F0FDF4", fg="#16A34A",
-                  font=(FONT_AR, fs(9), "bold"), bd=0, pady=8, cursor="hand2",
-                  activebackground="#DCFCE7", activeforeground="#15803D",
-                  command=self._show_manual_ip_dialog).pack(side="left", fill="x", expand=True, padx=(4, 4))
+        self._modern_button(
+            sub_btn_frame,
+            text=t("manual_connect"),
+            command=self._show_manual_ip_dialog,
+            variant="secondary",
+            width=120,
+        ).pack(side="left", fill="x", expand=True, padx=(4, 4))
 
-        tk.Button(sub_btn_frame, text=t("btn_open_folder"), bg="#F1F5F9", fg="#475569",
-                  font=(FONT_AR, fs(9), "bold"), bd=0, pady=8, cursor="hand2",
-                  activebackground="#E2E8F0",
-                  command=lambda: os.startfile(state["save_dir"])).pack(side="left", fill="x", expand=True, padx=(4, 0))
+        self._modern_button(
+            sub_btn_frame,
+            text=t("btn_open_folder"),
+            command=lambda: os.startfile(state["save_dir"]),
+            variant="muted",
+            width=120,
+        ).pack(side="left", fill="x", expand=True, padx=(4, 0))
 
         # خط فاصل
-        tk.Frame(self.tab_home, bg="#F1F5F9", height=1).pack(fill="x", padx=16, pady=6)
+        tk.Frame(self.tab_home, bg=T.BORDER_SOFT, height=1).pack(fill="x", padx=16, pady=6)
 
         # Recent Files — بطاقات محسّنة
-        rec_label_frame = tk.Frame(self.tab_home, bg="white")
+        rec_label_frame = tk.Frame(self.tab_home, bg=T.SURFACE)
         rec_label_frame.pack(fill="x", padx=18, pady=(4, 5))
-        tk.Label(rec_label_frame, text=t("recent_files"), bg="white",
-                 font=(FONT_AR, fs(10), "bold"), fg="#475569").pack(side="right" if LANG=="ar" else "left")
+        tk.Label(rec_label_frame, text=t("recent_files"), bg=T.SURFACE,
+                 font=(FONT_AR, fs(10), "bold"), fg=T.TEXT_SECOND).pack(side="right" if LANG=="ar" else "left")
 
-        self.recent_container = tk.Frame(self.tab_home, bg="white")
+        self.recent_container = tk.Frame(self.tab_home, bg=T.SURFACE)
         self.recent_container.pack(fill="both", expand=True, padx=16)
         self._refresh_recent()
 
@@ -802,11 +910,11 @@ class WameedApp:
         for w in self.recent_container.winfo_children(): w.destroy()
         recent = state["history"][-5:]
         if not recent:
-            empty = tk.Frame(self.recent_container, bg="white")
+            empty = tk.Frame(self.recent_container, bg=T.SURFACE)
             empty.pack(expand=True)
-            tk.Label(empty, text="📭", font=(FONT_AR, 24), bg="white", fg="#CBD5E1").pack(pady=(20, 4))
+            tk.Label(empty, text="📭", font=(FONT_AR, 24), bg=T.SURFACE, fg=T.TEXT_MUTED).pack(pady=(20, 4))
             tk.Label(empty, text=t("no_transfers_yet"),
-                    bg="white", fg="#94A3B8", font=(FONT_AR, fs(10))).pack()
+                    bg=T.SURFACE, fg=T.TEXT_MUTED, font=(FONT_AR, fs(10))).pack()
             return
 
         def _icon_for(fn, direction="received"):
@@ -825,29 +933,30 @@ class WameedApp:
             direction = item.get('direction', 'received')
             icon = _icon_for(fname, direction)
 
-            row = tk.Frame(self.recent_container, bg="#FAFAFA", pady=6, padx=10)
-            row.pack(fill="x", pady=2)
+            row = self._modern_card(self.recent_container)
+            row.pack(fill="x", pady=4)
+            row.configure(padx=10, pady=6) if not CUSTOMTKINTER_AVAILABLE else None
 
-            tk.Label(row, text=icon, bg="#FAFAFA", font=(FONT_AR, fs(14))).pack(
+            tk.Label(row, text=icon, bg=T.SURFACE, font=(FONT_AR, fs(14))).pack(
                 side="right" if LANG=="ar" else "left", padx=(0, 8))
 
-            info = tk.Frame(row, bg="#FAFAFA")
+            info = tk.Frame(row, bg=T.SURFACE)
             info.pack(side="right" if LANG=="ar" else "left", fill="x", expand=True)
 
             display_name = fname if len(fname) < 30 else fname[:27] + "..."
-            tk.Label(info, text=display_name, bg="#FAFAFA", font=(FONT_AR, fs(9), "bold"),
-                    fg="#1E293B", anchor="e" if LANG=="ar" else "w").pack(fill="x")
+            tk.Label(info, text=display_name, bg=T.SURFACE, font=(FONT_AR, fs(9), "bold"),
+                    fg=T.TEXT, anchor="e" if LANG=="ar" else "w").pack(fill="x")
 
             detail_txt = ftime
             if direction == "sent":
                 detail_txt = f"{ftime} | {t('direction_sent')}"
 
-            tk.Label(info, text=detail_txt, bg="#FAFAFA", fg="#94A3B8",
+            tk.Label(info, text=detail_txt, bg=T.SURFACE, fg=T.TEXT_MUTED,
                     font=(FONT_AR, fs(7)), anchor="e" if LANG=="ar" else "w").pack(fill="x")
 
             if fpath and os.path.exists(fpath):
                 tk.Button(row, text="👁️", command=lambda p=fpath: os.startfile(p),
-                         bg="#FAFAFA", fg="#3B82F6", bd=0, cursor="hand2",
+                         bg=T.SURFACE, fg=T.INFO, bd=0, cursor="hand2",
                          font=(FONT_AR, fs(11))).pack(side="left" if LANG=="ar" else "right", padx=4)
 
     def _update_status_display(self):
@@ -860,34 +969,34 @@ class WameedApp:
 
         if connection_state == "connected" and device_name:
             status_text = t("status_send_ready").format(name=device_name)
-            dot_color = "#22C55E"  # أخضر
+            dot_color = T.SUCCESS
         elif connection_state == "discovered" and device_name:
             status_text = t("status_discovered_only").format(name=device_name)
-            dot_color = "#3B82F6"  # أزرق
+            dot_color = T.INFO
         elif connection_state == "unstable" and device_name:
             status_text = t("status_unstable").format(name=device_name)
-            dot_color = "#FBBF24"  # أصفر
+            dot_color = T.WARNING
         elif connection_state == "connecting":
             status_text = t("status_verifying")
-            dot_color = "#3B82F6"  # أزرق
+            dot_color = T.INFO
         elif last_connection_time:
             elapsed = (datetime.now() - last_connection_time).total_seconds()
             if elapsed < 1800:
                 mins = max(1, int(elapsed / 60))
                 status_text = t("status_last_seen").format(mins=mins)
-                dot_color = "#FBBF24"  # أصفر
+                dot_color = T.WARNING
             else:
                 status_text = t("status_ready")
-                dot_color = "#9CA3AF"  # رمادي
+                dot_color = T.TEXT_MUTED
         else:
             status_text = t("status_ready")
-            dot_color = "#9CA3AF"  # رمادي
+            dot_color = T.TEXT_MUTED
 
-        self.status_dot = tk.Label(self.status_frame, text="●", fg=dot_color, bg="#F8FAFC", font=(FONT_AR, 18))
+        self.status_dot = tk.Label(self.status_frame, text="●", fg=dot_color, bg=T.SURFACE, font=(FONT_AR, 18))
         self.status_dot.pack(side="right" if LANG=="ar" else "left", padx=8)
 
         self.status_label = tk.Label(self.status_frame, text=status_text,
-                                     bg="#F8FAFC", font=(FONT_AR, fs(12), "bold"), fg="#1E293B")
+                                     bg=T.SURFACE, font=(FONT_AR, fs(12), "bold"), fg=T.TEXT)
         self.status_label.pack(side="right" if LANG=="ar" else "left")
 
         new_status = status_text
@@ -1035,21 +1144,22 @@ class WameedApp:
         """نافذة إدخال IP يدوي للاتصال"""
         logger.info("فتح نافذة الاتصال اليدوي")
         dialog = tk.Toplevel(self.root)
-        dialog.title("🔗 اتصال يدوي")
+        dialog.title(t("manual_connect"))
         dialog.geometry("360x180")
-        dialog.configure(bg="white")
+        dialog.configure(bg=T.MINT)
         dialog.transient(self.root)
         dialog.grab_set()
         dialog.resizable(False, False)
 
         tk.Label(dialog, text=t("manual_connect_title"), font=(FONT_AR, fs(13), "bold"),
-                bg="white", fg="#1E293B").pack(pady=(20, 10))
+                bg=T.MINT, fg=T.GREEN).pack(pady=(20, 10))
 
         ip_var = tk.StringVar(value=state.get("target_ip", ""))
         ip_entry = tk.Entry(dialog, textvariable=ip_var, font=(FONT_AR, fs(14)),
-                           bd=0, relief="flat", justify="center", bg="#F1F5F9",
-                           highlightthickness=2, highlightbackground="#CBD5E1",
-                           highlightcolor="#3B82F6", width=20)
+                           bd=0, relief="flat", justify="center", bg=T.SURFACE,
+                           fg=T.TEXT, insertbackground=T.GREEN,
+                           highlightthickness=2, highlightbackground=T.BORDER_SOFT,
+                           highlightcolor=T.GREEN, width=20)
         ip_entry.pack(padx=30, pady=5, ipady=6)
         ip_entry.focus_set()
 
@@ -1066,10 +1176,7 @@ class WameedApp:
             else:
                 messagebox.showwarning(t("warning"), t("manual_connect_warn"))
 
-        tk.Button(dialog, text=t("manual_connect_btn"), bg="#2E7D32", fg="white",
-                  font=(FONT_AR, fs(11), "bold"), bd=0, pady=8, cursor="hand2",
-                  activebackground="#1B5E20", activeforeground="white",
-                  command=connect).pack(fill="x", padx=30, pady=(10, 15))
+        self._modern_button(dialog, text=t("manual_connect_btn"), command=connect, variant="primary").pack(fill="x", padx=30, pady=(10, 15))
 
         ip_entry.bind("<Return>", lambda e: connect())
 
@@ -1079,24 +1186,33 @@ class WameedApp:
         dialog = tk.Toplevel(self.root)
         dialog.title(t("discovered_devices"))
         dialog.geometry("400x350")
-        dialog.configure(bg="white")
+        dialog.configure(bg=T.MINT)
         dialog.transient(self.root)
         dialog.grab_set()
 
         # Header
         tk.Label(dialog, text=t("discovered_devices"), font=(FONT_AR, fs(14), "bold"),
-                bg="white", fg="#2E7D32").pack(pady=15)
+                bg=T.MINT, fg=T.GREEN).pack(pady=15)
 
         # Status label
         status_label = tk.Label(dialog, text=t("status_searching"), font=(FONT_AR, fs(10)),
-                               bg="white", fg="#3B82F6")
+                               bg=T.MINT, fg=T.INFO)
         status_label.pack()
 
         # Device list frame
-        list_frame = tk.Frame(dialog, bg="white", bd=1, relief="solid")
+        list_frame = self._modern_card(dialog)
         list_frame.pack(fill="both", expand=True, padx=20, pady=10)
 
-        devices_listbox = tk.Listbox(list_frame, font=(FONT_AR, fs(11)), bd=0, selectmode="single")
+        devices_listbox = tk.Listbox(
+            list_frame,
+            font=(FONT_AR, fs(11)),
+            bd=0,
+            selectmode="single",
+            bg=T.SURFACE,
+            fg=T.TEXT,
+            selectbackground=T.GREEN_95,
+            selectforeground=T.GREEN_DARK,
+        )
         devices_listbox.pack(fill="both", expand=True, padx=5, pady=5)
 
         discovered_devices = []
@@ -1111,7 +1227,7 @@ class WameedApp:
                     name = device.get("name", "?")
                     logger.info(f"تم اختيار الجهاز {name} من قائمة البحث — التحقق من الاتصال...")
 
-                    status_label.config(text=t("status_verifying"), fg="#3B82F6")
+                    status_label.config(text=t("status_verifying"), fg=T.INFO)
                     dialog.update_idletasks()
 
                     device_info = {
@@ -1148,7 +1264,7 @@ class WameedApp:
                                 self._set_connection_state("discovered", device_info)
                                 status_label.config(
                                     text=f"{t('preflight_failed')} ({reason})",
-                                    fg="#EF4444"
+                                    fg=T.ERROR
                                 )
 
                         self.root.after(0, finish)
@@ -1174,20 +1290,18 @@ class WameedApp:
                     ip = device.get("ip", "")
                     display = f"📱 {name}"
                     devices_listbox.insert(tk.END, display)
-                status_label.config(text=t("found_devices").format(count=len(found)), fg="#22C55E")
+                status_label.config(text=t("found_devices").format(count=len(found)), fg=T.SUCCESS)
             else:
                 logger.warning("لم يتم العثور على أي أجهزة هاتف نشطة")
-                status_label.config(text=t("no_devices_found"), fg="#EF4444")
+                status_label.config(text=t("no_devices_found"), fg=T.ERROR)
 
         # زر البحث
-        tk.Button(dialog, text="🔍 " + t("btn_search_devices"), command=search_devices,
-                 bg="#3B82F6", fg="white", font=(FONT_AR, fs(10), "bold"),
-                 bd=0, pady=8, cursor="hand2").pack(fill="x", padx=20, pady=5)
+        self._modern_button(dialog, text=t("btn_search_devices"), command=search_devices,
+                            variant="primary").pack(fill="x", padx=20, pady=5)
 
         # إغلاق
-        tk.Button(dialog, text=t("close"), command=dialog.destroy,
-                 bg="#E2E8F0", fg="#1E293B", font=(FONT_AR, fs(9)),
-                 bd=0, pady=6).pack(fill="x", padx=20, pady=5)
+        self._modern_button(dialog, text=t("close"), command=dialog.destroy,
+                            variant="muted").pack(fill="x", padx=20, pady=5)
 
         # بدء البحث تلقائياً
         dialog.after(500, search_devices)
@@ -1356,27 +1470,30 @@ class WameedApp:
         for w in self.tab_devices.winfo_children(): w.destroy()
 
         # Header
-        header = tk.Frame(self.tab_devices, bg="#F8FAFC", padx=20, pady=15)
+        header = tk.Frame(self.tab_devices, bg=T.SURFACE, padx=20, pady=15)
         header.pack(fill="x")
         tk.Label(header, text=t("tab_devices"), font=(FONT_AR, fs(14), "bold"),
-                bg="#F8FAFC", fg="#2E7D32").pack(side="right" if LANG=="ar" else "left")
+                bg=T.SURFACE, fg=T.GREEN).pack(side="right" if LANG=="ar" else "left")
 
         if not state["trusted_devices"] and not state.get("device_history", []):
             # لا توجد أجهزة
-            empty_frame = tk.Frame(self.tab_devices, bg="white")
+            empty_frame = tk.Frame(self.tab_devices, bg=T.SURFACE)
             empty_frame.pack(expand=True)
             tk.Label(empty_frame, text=t("no_devices"), font=(FONT_AR, fs(12)),
-                    bg="white", fg="#94A3B8").pack(pady=50)
+                    bg=T.SURFACE, fg=T.TEXT_MUTED).pack(pady=50)
 
-            tk.Button(empty_frame, text="🔍 " + t("btn_search_devices"),
-                     command=self._show_discovery_dialog, bg="#3B82F6", fg="white",
-                     font=(FONT_AR, fs(10), "bold"), bd=0, pady=8, padx=20).pack()
+            self._modern_button(
+                empty_frame,
+                text=t("btn_search_devices"),
+                command=self._show_discovery_dialog,
+                variant="secondary",
+            ).pack()
             return
 
         # Canvas for scrolling
-        canvas = tk.Canvas(self.tab_devices, bg="white", highlightthickness=0)
+        canvas = tk.Canvas(self.tab_devices, bg=T.SURFACE, highlightthickness=0)
         scroll = ttk.Scrollbar(self.tab_devices, orient="vertical", command=canvas.yview)
-        frame = tk.Frame(canvas, bg="white")
+        frame = tk.Frame(canvas, bg=T.SURFACE)
 
         frame.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
         canvas.create_window((0,0), window=frame, anchor="nw", width=460)
@@ -1415,34 +1532,33 @@ class WameedApp:
 
         # عرض الأجهزة
         for device_id, device in all_devices.items():
-            row = tk.Frame(frame, bg="white", pady=10, padx=15)
-            row.pack(fill="x")
-
             # التحقق إذا كان الجهاز متصلاً حالياً
             is_connected = connected_device and connected_device.get("id") == device_id
+            row = self._modern_card(frame, selected=is_connected)
+            row.pack(fill="x", padx=15, pady=6)
 
             # أيقونة الجهاز
             icon = "📱" if not is_connected else "✅"
-            color = "#22C55E" if is_connected else "#3B82F6"
+            color = T.SUCCESS if is_connected else T.INFO
 
             # اسم الجهاز والحالة
-            name_frame = tk.Frame(row, bg="white")
-            name_frame.pack(fill="x")
+            name_frame = tk.Frame(row, bg=T.SURFACE)
+            name_frame.pack(fill="x", padx=15, pady=(12, 4))
 
-            tk.Label(name_frame, text=icon, bg="white", font=(FONT_AR, fs(16))).pack(side="right" if LANG=="ar" else "left", padx=5)
+            tk.Label(name_frame, text=icon, bg=T.SURFACE, font=(FONT_AR, fs(16))).pack(side="right" if LANG=="ar" else "left", padx=5)
 
             name_text = device["name"]
             if is_connected:
                 name_text += f"  {t('connected_now')}"
 
-            tk.Label(name_frame, text=name_text, bg="white", font=(FONT_AR, fs(11), "bold"),
+            tk.Label(name_frame, text=name_text, bg=T.SURFACE, font=(FONT_AR, fs(11), "bold"),
                     fg=color, anchor="e" if LANG=="ar" else "w").pack(side="right" if LANG=="ar" else "left", fill="x", expand=True)
 
             # وقت آخر اتصال
             if device.get("last_seen") and not is_connected:
                 time_text = t("last_connected").format(time=device["last_seen"])
-                tk.Label(row, text=time_text, bg="white", fg="#94A3B8",
-                        font=(FONT_AR, fs(9))).pack(anchor="e" if LANG=="ar" else "w")
+                tk.Label(row, text=time_text, bg=T.SURFACE, fg=T.TEXT_MUTED,
+                        font=(FONT_AR, fs(9))).pack(anchor="e" if LANG=="ar" else "w", padx=15, pady=(0, 4))
 
             # زر الإرسال السريع (للأجهزة الموثوقة)
             if device["trusted"]:
@@ -1454,15 +1570,18 @@ class WameedApp:
                 if is_connected:
                     current_ip = connected_device.get("ip")
 
-                btn_text = "📤 " + t("btn_send")
-                btn_color = "#2E7D32"
+                btn_text = t("btn_send")
 
-                tk.Button(row, text=btn_text, command=make_send_handler(current_ip, device["name"]),
-                         bg=btn_color, fg="white", font=(FONT_AR, fs(9), "bold"),
-                         bd=0, pady=5, padx=15, cursor="hand2").pack(anchor="e" if LANG=="ar" else "w", pady=5)
+                self._modern_button(
+                    row,
+                    text=btn_text,
+                    command=make_send_handler(current_ip, device["name"]),
+                    variant="primary",
+                    width=110,
+                ).pack(anchor="e" if LANG=="ar" else "w", padx=15, pady=(4, 12))
 
             # خط فاصل
-            tk.Frame(frame, bg="#F1F5F9", height=1).pack(fill="x", padx=15)
+            tk.Frame(frame, bg=T.SURFACE, height=1).pack(fill="x", padx=15)
 
     def _quick_connect(self, device_id, device_name):
         """اتصال سريع بجهاز موثوق"""
@@ -1530,21 +1649,21 @@ class WameedApp:
         for w in self.tab_history.winfo_children(): w.destroy()
 
         # Header
-        header = tk.Frame(self.tab_history, bg="#F8FAFC", padx=20, pady=15)
+        header = tk.Frame(self.tab_history, bg=T.SURFACE, padx=20, pady=15)
         header.pack(fill="x")
         tk.Label(header, text=t("tab_history"), font=(FONT_AR, fs(14), "bold"),
-                bg="#F8FAFC", fg="#2E7D32").pack(side="right" if LANG=="ar" else "left")
+                bg=T.SURFACE, fg=T.GREEN).pack(side="right" if LANG=="ar" else "left")
 
         if not state["history"]:
-            empty_frame = tk.Frame(self.tab_history, bg="white")
+            empty_frame = tk.Frame(self.tab_history, bg=T.SURFACE)
             empty_frame.pack(expand=True)
-            tk.Label(empty_frame, text=t("no_history"), bg="white", fg="#94A3B8",
+            tk.Label(empty_frame, text=t("no_history"), bg=T.SURFACE, fg=T.TEXT_MUTED,
                     font=(FONT_AR, fs(12))).pack(pady=50)
             return
 
-        canvas = tk.Canvas(self.tab_history, bg="white", highlightthickness=0)
+        canvas = tk.Canvas(self.tab_history, bg=T.SURFACE, highlightthickness=0)
         scroll = ttk.Scrollbar(self.tab_history, orient="vertical", command=canvas.yview)
-        frame = tk.Frame(canvas, bg="white")
+        frame = tk.Frame(canvas, bg=T.SURFACE)
 
         frame.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
         canvas.create_window((0,0), window=frame, anchor="nw", width=460)
@@ -1569,12 +1688,9 @@ class WameedApp:
         for entry in reversed(state["history"]):
             # بطاقة الملف
             direction = entry.get("direction", "received")
-            card_bg = "#F8FAFC" if direction == "received" else "#F0F9FF"
-            border_color = "#E2E8F0" if direction == "received" else "#BAE6FD"
-
-            card = tk.Frame(frame, bg=card_bg, padx=15, pady=12,
-                           highlightthickness=1, highlightbackground=border_color)
-            card.pack(fill="x", padx=15, pady=5)
+            card_bg = T.SURFACE
+            card = self._modern_card(frame, selected=direction == "sent")
+            card.pack(fill="x", padx=15, pady=6)
 
             filename = entry.get("filename", "")
             time_str = entry.get("time", "")
@@ -1583,7 +1699,7 @@ class WameedApp:
 
             # الصف العلوي: أيقونة + اسم الملف
             top_row = tk.Frame(card, bg=card_bg)
-            top_row.pack(fill="x")
+            top_row.pack(fill="x", padx=15, pady=(12, 0))
 
             icon = get_file_icon(filename, direction)
             tk.Label(top_row, text=icon, bg=card_bg, font=(FONT_AR, fs(20))).pack(
@@ -1592,12 +1708,13 @@ class WameedApp:
             # اسم الملف (مختصر إذا طويل)
             display_name = filename if len(filename) < 35 else filename[:32] + "..."
             tk.Label(top_row, text=display_name, bg=card_bg, font=(FONT_AR, fs(11), "bold"),
+                    fg=T.TEXT,
                     anchor="e" if LANG=="ar" else "w").pack(
                 side="right" if LANG=="ar" else "left", fill="x", expand=True)
 
             # الصف السفلي: التفاصيل والأزرار
             bottom_row = tk.Frame(card, bg=card_bg)
-            bottom_row.pack(fill="x", pady=(8, 0))
+            bottom_row.pack(fill="x", padx=15, pady=(8, 12))
 
             # وقت وتفاصيل النقل
             if direction == "received":
@@ -1605,7 +1722,7 @@ class WameedApp:
             else:
                 info_text = f"{time_str}  •  {t('sent_to').format(device=device_name or 'الهاتف')}"
 
-            tk.Label(bottom_row, text=info_text, bg=card_bg, fg="#64748B",
+            tk.Label(bottom_row, text=info_text, bg=card_bg, fg=T.TEXT_MUTED,
                     font=(FONT_AR, fs(9))).pack(side="right" if LANG=="ar" else "left")
 
             # أزرار الإجراءات
@@ -1614,22 +1731,30 @@ class WameedApp:
 
             if filepath and os.path.exists(filepath):
                 # زر فتح الملف
-                tk.Button(btn_frame, text=t("open_file"), command=lambda p=filepath: os.startfile(p),
-                         bg="#10B981" if direction=="received" else "#3B82F6", fg="white", font=(FONT_AR, fs(8)),
-                         bd=0, pady=3, padx=10, cursor="hand2").pack(side="right" if LANG=="ar" else "left", padx=2)
+                self._modern_button(
+                    btn_frame,
+                    text=t("open_file"),
+                    command=lambda p=filepath: os.startfile(p),
+                    variant="secondary",
+                    width=88,
+                ).pack(side="right" if LANG=="ar" else "left", padx=2)
 
                 # زر فتح المجلد
                 folder = os.path.dirname(filepath)
-                tk.Button(btn_frame, text=t("open_folder"), command=lambda f=folder: os.startfile(f),
-                         bg="#64748B", fg="white", font=(FONT_AR, fs(8)),
-                         bd=0, pady=3, padx=10, cursor="hand2").pack(side="right" if LANG=="ar" else "left", padx=2)
+                self._modern_button(
+                    btn_frame,
+                    text=t("open_folder"),
+                    command=lambda f=folder: os.startfile(f),
+                    variant="muted",
+                    width=88,
+                ).pack(side="right" if LANG=="ar" else "left", padx=2)
 
     def _build_settings(self):
         for w in self.tab_settings.winfo_children(): w.destroy()
 
-        canvas = tk.Canvas(self.tab_settings, bg="white", highlightthickness=0)
+        canvas = tk.Canvas(self.tab_settings, bg=T.SURFACE, highlightthickness=0)
         scroll = ttk.Scrollbar(self.tab_settings, orient="vertical", command=canvas.yview)
-        container = tk.Frame(canvas, bg="white", padx=20, pady=20)
+        container = tk.Frame(canvas, bg=T.SURFACE, padx=20, pady=20)
         container_window = canvas.create_window((0, 0), window=container, anchor="nw")
 
         def _sync_scroll_region(_event=None):
@@ -1656,8 +1781,8 @@ class WameedApp:
         canvas.pack(side="left", fill="both", expand=True)
 
         # Language
-        tk.Label(container, text=t("lang_label"), bg="white", font=(FONT_AR, fs(10), "bold")).pack(anchor="e" if LANG=="ar" else "w")
-        lang_frame = tk.Frame(container, bg="white")
+        tk.Label(container, text=t("lang_label"), bg=T.SURFACE, fg=T.TEXT, font=(FONT_AR, fs(10), "bold")).pack(anchor="e" if LANG=="ar" else "w")
+        lang_frame = tk.Frame(container, bg=T.SURFACE)
         lang_frame.pack(fill="x", pady=5)
 
         def set_lang(l):
@@ -1667,85 +1792,78 @@ class WameedApp:
             save_config()
             self.setup_ui()
 
-        tk.Button(lang_frame, text="العربية", command=lambda: set_lang("ar"), width=10).pack(side="right" if LANG=="ar" else "left", padx=5)
-        tk.Button(lang_frame, text="English", command=lambda: set_lang("en"), width=10).pack(side="right" if LANG=="ar" else "left", padx=5)
+        self._modern_button(lang_frame, text="العربية", command=lambda: set_lang("ar"), variant="secondary", width=100).pack(side="right" if LANG=="ar" else "left", padx=5)
+        self._modern_button(lang_frame, text="English", command=lambda: set_lang("en"), variant="secondary", width=100).pack(side="right" if LANG=="ar" else "left", padx=5)
 
         ttk.Separator(container).pack(fill="x", pady=15)
 
         # Save Dir
-        tk.Label(container, text=t("save_dir_label"), bg="white", font=(FONT_AR, fs(10), "bold")).pack(anchor="e" if LANG=="ar" else "w")
-        path_frame = tk.Frame(container, bg="white")
+        tk.Label(container, text=t("save_dir_label"), bg=T.SURFACE, fg=T.TEXT, font=(FONT_AR, fs(10), "bold")).pack(anchor="e" if LANG=="ar" else "w")
+        path_frame = tk.Frame(container, bg=T.SURFACE)
         path_frame.pack(fill="x", pady=5)
 
         self.path_var = tk.StringVar(value=state["save_dir"])
-        tk.Entry(path_frame, textvariable=self.path_var, font=(FONT_AR, fs(9)), bd=1, relief="solid").pack(side="right" if LANG=="ar" else "left", fill="x", expand=True, padx=5)
-        tk.Button(path_frame, text="...", command=self.browse_folder).pack(side="right" if LANG=="ar" else "left")
+        tk.Entry(path_frame, textvariable=self.path_var, font=(FONT_AR, fs(9)), bd=1, relief="solid",
+                 bg=T.SURFACE_DIM, fg=T.TEXT, insertbackground=T.GREEN).pack(side="right" if LANG=="ar" else "left", fill="x", expand=True, padx=5)
+        self._modern_button(path_frame, text="...", command=self.browse_folder, variant="muted", width=52).pack(side="right" if LANG=="ar" else "left")
 
         # Auto Open File
         self.auto_open_var = tk.BooleanVar(value=state["auto_open"])
         tk.Checkbutton(container, text=t("auto_open_file_label"), variable=self.auto_open_var,
-                       bg="white", font=(FONT_AR, fs(10)), command=self.toggle_auto_open).pack(anchor="e" if LANG=="ar" else "w", pady=(10, 0))
+                       bg=T.SURFACE, fg=T.TEXT, activebackground=T.SURFACE, selectcolor=T.GREEN_95,
+                       font=(FONT_AR, fs(10)), command=self.toggle_auto_open).pack(anchor="e" if LANG=="ar" else "w", pady=(10, 0))
 
         # Auto Open Folder
         self.auto_open_folder_var = tk.BooleanVar(value=state.get("auto_open_folder", False))
         tk.Checkbutton(container, text=t("auto_open_folder_label"), variable=self.auto_open_folder_var,
-                       bg="white", font=(FONT_AR, fs(10)), command=self.toggle_auto_open_folder).pack(anchor="e" if LANG=="ar" else "w", pady=(0, 10))
+                       bg=T.SURFACE, fg=T.TEXT, activebackground=T.SURFACE, selectcolor=T.GREEN_95,
+                       font=(FONT_AR, fs(10)), command=self.toggle_auto_open_folder).pack(anchor="e" if LANG=="ar" else "w", pady=(0, 10))
 
         ttk.Separator(container).pack(fill="x", pady=15)
 
         # =================== Updates Section ===================
-        tk.Label(container, text=t("updates_title"), bg="white", font=(FONT_AR, fs(10), "bold")).pack(anchor="e" if LANG=="ar" else "w", pady=(5, 2))
+        tk.Label(container, text=t("updates_title"), bg=T.SURFACE, fg=T.TEXT, font=(FONT_AR, fs(10), "bold")).pack(anchor="e" if LANG=="ar" else "w", pady=(5, 2))
 
-        update_frame = tk.Frame(container, bg="white")
+        update_frame = tk.Frame(container, bg=T.SURFACE)
         update_frame.pack(fill="x", pady=5)
 
         tk.Label(update_frame, text=t("updates_current").format(version=VERSION),
-                 bg="white", fg="#475569", font=(FONT_AR, fs(9))).pack(
+                 bg=T.SURFACE, fg=T.TEXT_SECOND, font=(FONT_AR, fs(9))).pack(
             side="right" if LANG=="ar" else "left", fill="x", expand=True,
             anchor="e" if LANG=="ar" else "w")
 
-        tk.Button(update_frame, text=t("check_updates"), command=self._show_update_dialog,
-                  bg="#E0F2FE", fg="#075985", font=(FONT_AR, fs(9)), bd=0, pady=6, padx=14,
-                  cursor="hand2").pack(side="left" if LANG=="ar" else "right", padx=3)
+        self._modern_button(update_frame, text=t("check_updates"), command=self._show_update_dialog,
+                            variant="secondary", width=130).pack(side="left" if LANG=="ar" else "right", padx=3)
 
         ttk.Separator(container).pack(fill="x", pady=15)
 
         # Trusted Devices
-        tk.Label(container, text=t("trusted_devices"), bg="white", font=(FONT_AR, fs(10), "bold")).pack(anchor="e" if LANG=="ar" else "w", pady=(10, 2))
+        tk.Label(container, text=t("trusted_devices"), bg=T.SURFACE, fg=T.TEXT, font=(FONT_AR, fs(10), "bold")).pack(anchor="e" if LANG=="ar" else "w", pady=(10, 2))
         self.devices_list = tk.Listbox(container, height=5, font=(FONT_AR, fs(9)), bd=1, relief="solid")
         self.devices_list.pack(fill="x")
         self.refresh_devices_list()
 
-        tk.Button(container, text=t("delete_device"), command=self.remove_device,
-                  bg="#FEE2E2", fg="#991B1B", bd=0, pady=5, font=(FONT_AR, fs(9))).pack(anchor="e" if LANG=="ar" else "w", pady=5)
+        self._modern_button(container, text=t("delete_device"), command=self.remove_device,
+                            variant="danger", width=140).pack(anchor="e" if LANG=="ar" else "w", pady=5)
 
         ttk.Separator(container).pack(fill="x", pady=15)
 
         # =================== Diagnostics Section ===================
-        tk.Label(container, text=t("diag_title"), bg="white", font=(FONT_AR, fs(10), "bold")).pack(anchor="e" if LANG=="ar" else "w", pady=(5, 2))
+        tk.Label(container, text=t("diag_title"), bg=T.SURFACE, fg=T.TEXT, font=(FONT_AR, fs(10), "bold")).pack(anchor="e" if LANG=="ar" else "w", pady=(5, 2))
 
-        diag_frame = tk.Frame(container, bg="white")
+        diag_frame = tk.Frame(container, bg=T.SURFACE)
         diag_frame.pack(fill="x", pady=5)
 
-        tk.Button(diag_frame, text=t("diag_open_log"), command=self._open_log_file,
-                  bg="#EFF6FF", fg="#1E40AF", font=(FONT_AR, fs(9)), bd=0, pady=6, padx=12,
-                  cursor="hand2").pack(side="right" if LANG=="ar" else "left", padx=3)
-
-        tk.Button(diag_frame, text=t("diag_log_btn"), command=self._show_log_viewer,
-                  bg="#F0FDF4", fg="#166534", font=(FONT_AR, fs(9)), bd=0, pady=6, padx=12,
-                  cursor="hand2").pack(side="right" if LANG=="ar" else "left", padx=3)
-
-        tk.Button(diag_frame, text=t("diag_net_btn"), command=self._show_network_diagnostics,
-                  bg="#FFF7ED", fg="#9A3412", font=(FONT_AR, fs(9)), bd=0, pady=6, padx=12,
-                  cursor="hand2").pack(side="right" if LANG=="ar" else "left", padx=3)
-
-        tk.Button(diag_frame, text=t("firewall_copy"), command=self._copy_firewall_commands,
-                  bg="#EFF6FF", fg="#2563EB", font=(FONT_AR, fs(9)), bd=0, pady=6, padx=12,
-                  cursor="hand2").pack(side="right" if LANG=="ar" else "left", padx=3)
-
-        tk.Button(diag_frame, text=t("firewall_fix"), command=self._run_firewall_fix,
-                  bg="#FEF2F2", fg="#991B1B", font=(FONT_AR, fs(9)), bd=0, pady=6, padx=12,
-                  cursor="hand2").pack(side="right" if LANG=="ar" else "left", padx=3)
+        self._modern_button(diag_frame, text=t("diag_open_log"), command=self._open_log_file,
+                            variant="muted", width=120).pack(side="right" if LANG=="ar" else "left", padx=3, pady=3)
+        self._modern_button(diag_frame, text=t("diag_log_btn"), command=self._show_log_viewer,
+                            variant="secondary", width=120).pack(side="right" if LANG=="ar" else "left", padx=3, pady=3)
+        self._modern_button(diag_frame, text=t("diag_net_btn"), command=self._show_network_diagnostics,
+                            variant="secondary", width=120).pack(side="right" if LANG=="ar" else "left", padx=3, pady=3)
+        self._modern_button(diag_frame, text=t("firewall_copy"), command=self._copy_firewall_commands,
+                            variant="muted", width=120).pack(side="right" if LANG=="ar" else "left", padx=3, pady=3)
+        self._modern_button(diag_frame, text=t("firewall_fix"), command=self._run_firewall_fix,
+                            variant="danger", width=120).pack(side="right" if LANG=="ar" else "left", padx=3, pady=3)
 
     def _call_if_widget_exists(self, widget, callback):
         try:
@@ -1786,6 +1904,51 @@ class WameedApp:
             return f"{int(value)} {units[unit_index]}"
         return f"{value:.1f} {units[unit_index]}"
 
+    def _free_bytes_for_path(self, path):
+        probe = os.path.abspath(path)
+        while probe and not os.path.exists(probe):
+            parent = os.path.dirname(probe)
+            if parent == probe:
+                break
+            probe = parent
+        try:
+            return shutil.disk_usage(probe).free
+        except Exception:
+            return 0
+
+    def _required_update_space(self, download_size=0):
+        minimum = 512 * 1024 * 1024
+        if download_size and download_size > 0:
+            return max(minimum, int(download_size * 3) + (128 * 1024 * 1024))
+        return minimum
+
+    def _format_update_no_space(self, free_bytes, required_bytes):
+        return t("update_no_space").format(
+            free=self._format_bytes(free_bytes),
+            required=self._format_bytes(required_bytes)
+        )
+
+    def _is_no_space_error(self, exc):
+        return (
+            getattr(exc, "errno", None) == errno.ENOSPC or
+            "No space left on device" in str(exc)
+        )
+
+    def _cleanup_old_update_files(self, updates_dir, keep_path=None):
+        keep = os.path.abspath(keep_path) if keep_path else None
+        try:
+            for name in os.listdir(updates_dir):
+                path = os.path.abspath(os.path.join(updates_dir, name))
+                if keep and path == keep:
+                    continue
+                lower_name = name.lower()
+                if lower_name.startswith("wameedsetup-") and lower_name.endswith(".exe"):
+                    os.remove(path)
+                elif lower_name.endswith(".tmp"):
+                    os.remove(path)
+        except Exception as exc:
+            logger.debug(f"Could not clean old update files: {exc}")
+
     def _update_file_name(self, update_url, version):
         try:
             name = os.path.basename(urlparse(update_url).path)
@@ -1805,7 +1968,7 @@ class WameedApp:
         dialog = tk.Toplevel(self.root)
         dialog.title(t("updates_title"))
         dialog.geometry("520x360")
-        dialog.configure(bg="white")
+        dialog.configure(bg=T.MINT)
         dialog.transient(self.root)
         dialog.grab_set()
 
@@ -1814,47 +1977,50 @@ class WameedApp:
         secondary_side = "left" if LANG == "ar" else "right"
         justify = "right" if LANG == "ar" else "left"
 
-        content = tk.Frame(dialog, bg="white", padx=24, pady=22)
+        content = self._modern_card(dialog)
+        content.pack(fill="both", expand=True, padx=18, pady=18)
+        content = tk.Frame(content, bg=T.SURFACE, padx=18, pady=16)
         content.pack(fill="both", expand=True)
 
-        tk.Label(content, text=t("updates_title"), bg="white", fg="#0F172A",
+        tk.Label(content, text=t("updates_title"), bg=T.SURFACE, fg=T.GREEN,
                  font=(FONT_AR, fs(15), "bold")).pack(anchor=anchor)
-        tk.Label(content, text=t("updates_current").format(version=VERSION), bg="white",
-                 fg="#64748B", font=(FONT_AR, fs(9))).pack(anchor=anchor, pady=(4, 18))
+        tk.Label(content, text=t("updates_current").format(version=VERSION), bg=T.SURFACE,
+                 fg=T.TEXT_MUTED, font=(FONT_AR, fs(9))).pack(anchor=anchor, pady=(4, 18))
 
         title_var = tk.StringVar(value=t("checking_updates"))
         detail_var = tk.StringVar(value="")
         notes_var = tk.StringVar(value="")
         progress_var = tk.StringVar(value="")
 
-        tk.Label(content, textvariable=title_var, bg="white", fg="#1E293B",
+        tk.Label(content, textvariable=title_var, bg=T.SURFACE, fg=T.TEXT,
                  font=(FONT_AR, fs(11), "bold"), justify=justify).pack(anchor=anchor)
-        tk.Label(content, textvariable=detail_var, bg="white", fg="#475569",
+        tk.Label(content, textvariable=detail_var, bg=T.SURFACE, fg=T.TEXT_SECOND,
                  font=(FONT_AR, fs(9)), justify=justify, wraplength=450).pack(anchor=anchor, pady=(8, 0))
-        tk.Label(content, textvariable=notes_var, bg="white", fg="#64748B",
+        tk.Label(content, textvariable=notes_var, bg=T.SURFACE, fg=T.TEXT_MUTED,
                  font=(FONT_AR, fs(9)), justify=justify, wraplength=450).pack(anchor=anchor, pady=(10, 0))
 
         progress = ttk.Progressbar(content, maximum=100, mode="determinate")
         progress.pack(fill="x", pady=(18, 4))
         progress.pack_forget()
 
-        progress_label = tk.Label(content, textvariable=progress_var, bg="white", fg="#334155",
+        progress_label = tk.Label(content, textvariable=progress_var, bg=T.SURFACE, fg=T.TEXT_SECOND,
                                   font=(FONT_AR, fs(9)), justify=justify)
         progress_label.pack(anchor=anchor)
         progress_label.pack_forget()
 
-        button_frame = tk.Frame(content, bg="white")
+        button_frame = tk.Frame(content, bg=T.SURFACE)
         button_frame.pack(side="bottom", fill="x", pady=(20, 0))
 
         close_btn = tk.Button(button_frame, text=t("update_close"), command=dialog.destroy,
-                              bg="#F1F5F9", fg="#334155", bd=0, padx=18, pady=8,
-                              font=(FONT_AR, fs(9)), cursor="hand2")
+                              bg=T.SURFACE_DIM, fg=T.TEXT_SECOND, bd=0, padx=18, pady=8,
+                              font=(FONT_AR, fs(9)), cursor="hand2",
+                              activebackground=T.BORDER_SOFT)
         close_btn.pack(side=secondary_side, padx=4)
 
         primary_btn = tk.Button(button_frame, text=t("checking_updates"), state="disabled",
-                                bg="#0EA5E9", fg="white", bd=0, padx=18, pady=8,
+                                bg=T.GREEN, fg="white", bd=0, padx=18, pady=8,
                                 font=(FONT_AR, fs(9), "bold"), cursor="hand2",
-                                activebackground="#0284C7", activeforeground="white")
+                                activebackground=T.GREEN_HOVER, activeforeground="white")
         primary_btn.pack(side=primary_side, padx=4)
 
         ui = {
@@ -1991,8 +2157,13 @@ class WameedApp:
                 updates_dir = os.path.join(APP_DATA_DIR, "updates")
                 os.makedirs(updates_dir, exist_ok=True)
                 installer_path = os.path.join(updates_dir, self._update_file_name(update_url, version))
+                self._cleanup_old_update_files(updates_dir, keep_path=installer_path)
                 if os.path.exists(installer_path):
                     os.remove(installer_path)
+                initial_required = self._required_update_space()
+                initial_free = self._free_bytes_for_path(updates_dir)
+                if initial_free < initial_required:
+                    raise RuntimeError(self._format_update_no_space(initial_free, initial_required))
 
                 post(lambda: (
                     title_var.set(t("update_download_start")),
@@ -2021,6 +2192,10 @@ class WameedApp:
                 ) as response:
                     response.raise_for_status()
                     total = int(response.headers.get("content-length") or 0)
+                    required = self._required_update_space(total)
+                    free = self._free_bytes_for_path(updates_dir)
+                    if free < required:
+                        raise RuntimeError(self._format_update_no_space(free, required))
                     with open(installer_path, "wb") as output:
                         for chunk in response.iter_content(chunk_size=1024 * 1024):
                             if not chunk:
@@ -2062,6 +2237,17 @@ class WameedApp:
                 logger.info(f"Windows update downloaded and validated: {installer_path} ({downloaded} bytes)")
                 post(lambda path=installer_path: show_ready(path))
             except Exception as exc:
+                display_error = exc
+                if self._is_no_space_error(exc):
+                    try:
+                        if 'installer_path' in locals() and os.path.exists(installer_path):
+                            os.remove(installer_path)
+                    except Exception:
+                        pass
+                    display_error = RuntimeError(self._format_update_no_space(
+                        self._free_bytes_for_path(updates_dir if 'updates_dir' in locals() else APP_DATA_DIR),
+                        self._required_update_space(total if 'total' in locals() else 0)
+                    ))
                 logger.exception("Windows update download failed")
                 report_windows_issue(
                     "update_download_failed",
@@ -2069,7 +2255,7 @@ class WameedApp:
                     url=info.get("updateUrl", ""),
                     remote_version=info.get("version", ""),
                 )
-                post(lambda error=exc: show_error(error))
+                post(lambda error=display_error: show_error(error))
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -2136,15 +2322,15 @@ if ($LaunchExe) {{
         dialog = tk.Toplevel(self.root)
         dialog.title(t("diag_log_btn"))
         dialog.geometry("700x500")
-        dialog.configure(bg="white")
+        dialog.configure(bg=T.MINT)
 
         # Header
-        header = tk.Frame(dialog, bg="#F0FDF4", pady=8)
+        header = tk.Frame(dialog, bg=T.MINT, pady=8)
         header.pack(fill="x")
-        tk.Label(header, text=t("diag_log_btn"), bg="#F0FDF4", fg="#166534",
+        tk.Label(header, text=t("diag_log_btn"), bg=T.MINT, fg=T.GREEN,
                  font=(FONT_AR, fs(12), "bold")).pack(side="right" if LANG=="ar" else "left", padx=15)
 
-        btn_frame = tk.Frame(header, bg="#F0FDF4")
+        btn_frame = tk.Frame(header, bg=T.MINT)
         btn_frame.pack(side="left" if LANG=="ar" else "right", padx=15)
 
         def copy_log():
@@ -2173,19 +2359,17 @@ if ($LaunchExe) {{
             log_text.config(state="disabled")
             log_text.see(tk.END)
 
-        tk.Button(btn_frame, text=t("diag_copy_log"), command=copy_log,
-                  bg="#E2E8F0", fg="#1E293B", font=(FONT_AR, fs(8)), bd=0, pady=3, padx=8,
-                  cursor="hand2").pack(side="left", padx=3)
-        tk.Button(btn_frame, text="🔄", command=refresh_log,
-                  bg="#E2E8F0", fg="#1E293B", font=(FONT_AR, fs(8)), bd=0, pady=3, padx=8,
-                  cursor="hand2").pack(side="left", padx=3)
+        self._modern_button(btn_frame, text=t("diag_copy_log"), command=copy_log,
+                            variant="muted", width=110).pack(side="left", padx=3)
+        self._modern_button(btn_frame, text="🔄", command=refresh_log,
+                            variant="muted", width=52).pack(side="left", padx=3)
 
         # Log text
         log_text = tk.Text(dialog, wrap="word", font=("Consolas", fs(9)),
-                          bg="#1E293B", fg="#E2E8F0", insertbackground="#E2E8F0",
+                          bg=T.SURFACE_DIM, fg=T.TEXT, insertbackground=T.GREEN,
                           bd=0, padx=10, pady=10)
-        log_text.tag_configure("error", foreground="#EF4444")
-        log_text.tag_configure("warning", foreground="#F59E0B")
+        log_text.tag_configure("error", foreground=T.ERROR)
+        log_text.tag_configure("warning", foreground=T.WARNING)
         scrollbar = tk.Scrollbar(dialog, command=log_text.yview)
         log_text.configure(yscrollcommand=scrollbar.set)
         scrollbar.pack(side="right", fill="y")
@@ -2198,22 +2382,22 @@ if ($LaunchExe) {{
         dialog = tk.Toplevel(self.root)
         dialog.title(t("diag_net_btn"))
         dialog.geometry("600x550")
-        dialog.configure(bg="white")
+        dialog.configure(bg=T.MINT)
 
         # Header
-        header = tk.Frame(dialog, bg="#FFF7ED", pady=8)
+        header = tk.Frame(dialog, bg=T.MINT, pady=8)
         header.pack(fill="x")
-        tk.Label(header, text=t("diag_net_btn"), bg="#FFF7ED", fg="#9A3412",
+        tk.Label(header, text=t("diag_net_btn"), bg=T.MINT, fg=T.GREEN,
                  font=(FONT_AR, fs(12), "bold")).pack(side="right" if LANG=="ar" else "left", padx=15)
 
         # Results area
         results_text = tk.Text(dialog, wrap="word", font=("Consolas", fs(9)),
-                              bg="#1E293B", fg="#E2E8F0", insertbackground="#E2E8F0",
+                              bg=T.SURFACE_DIM, fg=T.TEXT, insertbackground=T.GREEN,
                               bd=0, padx=10, pady=10, state="disabled")
-        results_text.tag_configure("pass", foreground="#22C55E")
-        results_text.tag_configure("fail", foreground="#EF4444")
-        results_text.tag_configure("info", foreground="#60A5FA")
-        results_text.tag_configure("header", foreground="#F59E0B", font=("Consolas", fs(10), "bold"))
+        results_text.tag_configure("pass", foreground=T.SUCCESS)
+        results_text.tag_configure("fail", foreground=T.ERROR)
+        results_text.tag_configure("info", foreground=T.INFO)
+        results_text.tag_configure("header", foreground=T.GREEN_DARK, font=("Consolas", fs(10), "bold"))
 
         def run_diagnostics():
             results_text.config(state="normal")
@@ -2354,24 +2538,22 @@ if ($LaunchExe) {{
             logger.info("Network diagnostic results copied")
 
         # Buttons
-        btn_bar = tk.Frame(dialog, bg="white", pady=8)
+        btn_bar = tk.Frame(dialog, bg=T.MINT, pady=8)
         btn_bar.pack(fill="x", padx=15)
 
-        tk.Button(btn_bar, text=t("diag_run"), command=lambda: threading.Thread(target=run_diagnostics, daemon=True).start(),
-                  bg="#2E7D32", fg="white", font=(FONT_AR, fs(9), "bold"), bd=0, pady=6, padx=15,
-                  cursor="hand2").pack(side="right" if LANG=="ar" else "left", padx=3)
-
-        tk.Button(btn_bar, text=t("diag_copy_results"), command=copy_results,
-                  bg="#E2E8F0", fg="#1E293B", font=(FONT_AR, fs(9)), bd=0, pady=6, padx=15,
-                  cursor="hand2").pack(side="right" if LANG=="ar" else "left", padx=3)
-
-        tk.Button(btn_bar, text=t("firewall_copy"), command=self._copy_firewall_commands,
-                  bg="#EFF6FF", fg="#2563EB", font=(FONT_AR, fs(9)), bd=0, pady=6, padx=12,
-                  cursor="hand2").pack(side="right" if LANG=="ar" else "left", padx=3)
-
-        tk.Button(btn_bar, text=t("firewall_fix"), command=self._run_firewall_fix,
-                  bg="#FEF2F2", fg="#991B1B", font=(FONT_AR, fs(9)), bd=0, pady=6, padx=12,
-                  cursor="hand2").pack(side="right" if LANG=="ar" else "left", padx=3)
+        self._modern_button(
+            btn_bar,
+            text=t("diag_run"),
+            command=lambda: threading.Thread(target=run_diagnostics, daemon=True).start(),
+            variant="primary",
+            width=110,
+        ).pack(side="right" if LANG=="ar" else "left", padx=3)
+        self._modern_button(btn_bar, text=t("diag_copy_results"), command=copy_results,
+                            variant="muted", width=130).pack(side="right" if LANG=="ar" else "left", padx=3)
+        self._modern_button(btn_bar, text=t("firewall_copy"), command=self._copy_firewall_commands,
+                            variant="secondary", width=120).pack(side="right" if LANG=="ar" else "left", padx=3)
+        self._modern_button(btn_bar, text=t("firewall_fix"), command=self._run_firewall_fix,
+                            variant="danger", width=120).pack(side="right" if LANG=="ar" else "left", padx=3)
 
         scrollbar = tk.Scrollbar(dialog, command=results_text.yview)
         results_text.configure(yscrollcommand=scrollbar.set)
@@ -2452,7 +2634,7 @@ if ($LaunchExe) {{
         win = tk.Toplevel(self.root)
         win.title(t("btn_send"))
         win.geometry("520x680")
-        win.configure(bg="#F8FAFC")
+        win.configure(bg=T.MINT)
         win.transient(self.root)
         win.grab_set()
         win.resizable(False, False)
@@ -2461,21 +2643,21 @@ if ($LaunchExe) {{
         self.selected_files = [] # قائمة المسارات الكاملة
 
         # ===== Header بتصميم أنيق =====
-        header_frame = tk.Frame(win, bg="#2E7D32", padx=20, pady=18)
+        header_frame = tk.Frame(win, bg=T.MINT, padx=20, pady=18)
         header_frame.pack(fill="x")
 
         header_text = t("btn_send")
         if device_name:
             header_text = f"📤 {t('btn_send')} ← {device_name}"
         tk.Label(header_frame, text=header_text, font=(FONT_AR, 15, "bold"),
-                bg="#2E7D32", fg="white").pack()
+                bg=T.MINT, fg=T.GREEN).pack()
 
         # ===== [Bottom Area] IP + Progress + Send — يُحزم أولاً ليبقى ثابتاً =====
-        bottom_frame = tk.Frame(win, bg="white", padx=20, pady=12)
+        bottom_frame = tk.Frame(win, bg=T.SURFACE, padx=20, pady=12)
         bottom_frame.pack(side="bottom", fill="x")
 
         # خط فاصل فوق المنطقة السفلية
-        tk.Frame(win, bg="#E2E8F0", height=1).pack(side="bottom", fill="x")
+        tk.Frame(win, bg=T.BORDER_SOFT, height=1).pack(side="bottom", fill="x")
 
         # تحديد IP الهدف تلقائياً (بدون عرض حقل IP في نافذة الإرسال)
         initial_ip = device_ip or state.get("target_ip", "")
@@ -2487,13 +2669,13 @@ if ($LaunchExe) {{
         self.target_ip_var = tk.StringVar(value=initial_ip if initial_ip else "")
 
         # حالة الإرسال (مخفية للبداية)
-        self.send_status_frame = tk.Frame(bottom_frame, bg="white")
+        self.send_status_frame = tk.Frame(bottom_frame, bg=T.SURFACE)
         self.progress_var = tk.DoubleVar(value=0)
         self.progress_bar = ttk.Progressbar(self.send_status_frame, orient="horizontal",
                                            mode="determinate", variable=self.progress_var)
         self.progress_bar.pack(fill="x", pady=4)
         self.progress_label = tk.Label(self.send_status_frame, text=t("preparing"),
-                                      bg="white", font=(FONT_AR, fs(9)), fg="#64748B")
+                                      bg=T.SURFACE, font=(FONT_AR, fs(9)), fg=T.TEXT_MUTED)
         self.progress_label.pack()
 
         def start_sending():
@@ -2520,7 +2702,7 @@ if ($LaunchExe) {{
 
             self.send_status_frame.pack(fill="x", before=send_btn, pady=(4, 0))
             send_btn.config(state="disabled", text=t("sending_progress"),
-                          bg="#66BB6A", cursor="watch")
+                          bg=T.GREEN_LIGHT, cursor="watch")
 
             if not self._verify_device_connection(ip, timeout=2.0):
                 logger.warning(f"⚠️ Preflight failed before sending to {ip}: TCP 7789 is not reachable")
@@ -2533,7 +2715,7 @@ if ($LaunchExe) {{
                 self._set_connection_state("discovered", device_info)
                 self._show_inline_message(win, t("preflight_failed"), "#EF4444", duration=4000)
                 self.send_status_frame.pack_forget()
-                send_btn.config(state="normal", text=f"⚡ {t('send_now')}", bg="#2E7D32", cursor="hand2")
+                send_btn.config(state="normal", text=t("send_now"), bg=T.GREEN, cursor="hand2")
                 return
 
             if mode == 0: # ملفات
@@ -2543,70 +2725,70 @@ if ($LaunchExe) {{
                 logger.info(f"Starting to send text content ({len(txt)} chars) to {ip}")
                 threading.Thread(target=self._execute_send_text, args=(ip, txt, win, self.progress_var, device_name, lambda: win.destroy()), daemon=True).start()
 
-        send_btn = tk.Button(bottom_frame, text=f"⚡ {t('send_now')}", command=start_sending,
-                            bg="#2E7D32", fg="white", font=(FONT_AR, fs(14), "bold"),
+        send_btn = tk.Button(bottom_frame, text=t("send_now"), command=start_sending,
+                            bg=T.GREEN, fg="white", font=(FONT_AR, fs(14), "bold"),
                             bd=0, pady=14, cursor="hand2",
-                            activebackground="#1B5E20", activeforeground="white")
+                            activebackground=T.GREEN_HOVER, activeforeground="white")
         send_btn.pack(fill="x", pady=(8, 0))
 
         # ===== تبويبات التصميم الحديث =====
         style = ttk.Style()
-        style.configure("Send.TNotebook", background="#F8FAFC")
+        style.configure("Send.TNotebook", background=T.MINT, borderwidth=0)
         style.configure("Send.TNotebook.Tab", font=(FONT_AR, fs(11)), padding=[20, 8])
 
         tabs = ttk.Notebook(win, style="Send.TNotebook")
         tabs.pack(fill="both", expand=True, padx=16, pady=(12, 8))
 
-        tab_file = tk.Frame(tabs, bg="white")
-        tab_text = tk.Frame(tabs, bg="white")
+        tab_file = tk.Frame(tabs, bg=T.SURFACE)
+        tab_text = tk.Frame(tabs, bg=T.SURFACE)
 
         tabs.add(tab_file, text=f"  {t('tab_file')}  ")
         tabs.add(tab_text, text=f"  {t('tab_text')}  ")
 
         # ========== [1] تبويب الملفات (دعم التعدد) ==========
-        file_container = tk.Frame(tab_file, bg="white", padx=15, pady=12)
+        file_container = tk.Frame(tab_file, bg=T.SURFACE, padx=15, pady=12)
         file_container.pack(fill="both", expand=True)
 
         # منطقة السحب والإفلات — تصميم محسّن مع حدود منقطة
-        self.drop_frame = tk.Frame(file_container, bg="#F0FFF4", height=90,
-                              highlightthickness=2, highlightbackground="#86EFAC")
+        self.drop_frame = tk.Frame(file_container, bg=T.GREEN_95, height=90,
+                              highlightthickness=2, highlightbackground=T.GREEN_LIGHT)
         self.drop_frame.pack(fill="x", pady=(0, 10))
         self.drop_frame.pack_propagate(False)
 
-        drop_inner = tk.Frame(self.drop_frame, bg="#F0FFF4")
+        drop_inner = tk.Frame(self.drop_frame, bg=T.GREEN_95)
         drop_inner.pack(expand=True)
 
-        self.drop_icon = tk.Label(drop_inner, text="📂", font=(FONT_AR, 22), bg="#F0FFF4", fg="#22C55E")
+        self.drop_icon = tk.Label(drop_inner, text="📂", font=(FONT_AR, 22), bg=T.GREEN_95, fg=T.SUCCESS)
         self.drop_icon.pack(side="left" if LANG=="ar" else "right", padx=8)
 
-        drop_text_frame = tk.Frame(drop_inner, bg="#F0FFF4")
+        drop_text_frame = tk.Frame(drop_inner, bg=T.GREEN_95)
         drop_text_frame.pack(side="left" if LANG=="ar" else "right")
 
         self.drop_txt = tk.Label(drop_text_frame, text=t("drop_here"),
-                                bg="#F0FFF4", font=(FONT_AR, fs(11), "bold"), fg="#166534")
+                                bg=T.GREEN_95, font=(FONT_AR, fs(11), "bold"), fg=T.GREEN_DARK)
         self.drop_txt.pack()
         tk.Label(drop_text_frame, text=t("or_click_browse"),
-                bg="#F0FFF4", font=(FONT_AR, fs(9)), fg="#4ADE80").pack()
+                bg=T.GREEN_95, font=(FONT_AR, fs(9)), fg=T.GREEN).pack()
 
         # قائمة الملفات المختارة (Scrollable)
-        list_header = tk.Frame(file_container, bg="white")
+        list_header = tk.Frame(file_container, bg=T.SURFACE)
         list_header.pack(fill="x")
-        tk.Label(list_header, text=t("selected_files"), bg="white",
-                font=(FONT_AR, fs(9), "bold"), fg="#64748B").pack(
+        tk.Label(list_header, text=t("selected_files"), bg=T.SURFACE,
+                font=(FONT_AR, fs(9), "bold"), fg=T.TEXT_SECOND).pack(
                     side="right" if LANG=="ar" else "left")
 
         # زر إضافة ملفات إضافية
-        add_more_btn = tk.Label(list_header, text=t("add_more"), bg="white",
-                               fg="#3B82F6", font=(FONT_AR, fs(9), "bold"), cursor="hand2")
+        add_more_btn = tk.Label(list_header, text=t("add_more"), bg=T.SURFACE,
+                               fg=T.GREEN, font=(FONT_AR, fs(9), "bold"), cursor="hand2")
         add_more_btn.pack(side="left" if LANG=="ar" else "right")
 
-        self.files_list_frame = tk.Frame(file_container, bg="white",
-                                        highlightthickness=1, highlightbackground="#E2E8F0")
+        self.files_list_frame = tk.Frame(file_container, bg=T.SURFACE_DIM,
+                                        highlightthickness=1, highlightbackground=T.BORDER_SOFT)
         self.files_list_frame.pack(fill="both", expand=True, pady=5)
 
-        self.files_canvas = tk.Canvas(self.files_list_frame, bg="white", highlightthickness=0)
+        self.files_canvas = tk.Canvas(self.files_list_frame, bg=T.SURFACE_DIM, highlightthickness=0)
         self.files_scroll = ttk.Scrollbar(self.files_list_frame, orient="vertical", command=self.files_canvas.yview)
-        self.files_inner = tk.Frame(self.files_canvas, bg="white")
+        self.files_inner = tk.Frame(self.files_canvas, bg=T.SURFACE_DIM)
 
         self.files_inner.bind("<Configure>", lambda e: self.files_canvas.configure(scrollregion=self.files_canvas.bbox("all")))
         self.files_canvas.create_window((0,0), window=self.files_inner, anchor="nw", width=400)
@@ -2630,11 +2812,11 @@ if ($LaunchExe) {{
         def update_file_list_ui():
             for w in self.files_inner.winfo_children(): w.destroy()
             if not self.selected_files:
-                empty_frame = tk.Frame(self.files_inner, bg="white")
+                empty_frame = tk.Frame(self.files_inner, bg=T.SURFACE_DIM)
                 empty_frame.pack(expand=True, fill="both")
-                tk.Label(empty_frame, text="📭", font=(FONT_AR, fs(20)), bg="white", fg="#CBD5E1").pack(pady=(15, 2))
+                tk.Label(empty_frame, text="📭", font=(FONT_AR, fs(20)), bg=T.SURFACE_DIM, fg=T.TEXT_MUTED).pack(pady=(15, 2))
                 tk.Label(empty_frame, text=t("no_files_selected"),
-                        bg="white", fg="#94A3B8", font=(FONT_AR, fs(10))).pack()
+                        bg=T.SURFACE_DIM, fg=T.TEXT_MUTED, font=(FONT_AR, fs(10))).pack()
                 return
 
             for idx, path in enumerate(self.selected_files):
@@ -2643,17 +2825,18 @@ if ($LaunchExe) {{
                 size_str = f"{fsize:.1f} KB" if fsize < 1024 else f"{fsize/1024:.1f} MB"
                 icon = _get_file_type_icon(fname)
 
-                f_row = tk.Frame(self.files_inner, bg="#FAFAFA", pady=6, padx=10)
+                f_row = tk.Frame(self.files_inner, bg=T.SURFACE, pady=6, padx=10,
+                                 highlightthickness=1, highlightbackground=T.BORDER_SOFT)
                 f_row.pack(fill="x", pady=2, padx=4)
 
-                tk.Label(f_row, text=icon, bg="#FAFAFA", font=(FONT_AR, fs(14))).pack(
+                tk.Label(f_row, text=icon, bg=T.SURFACE, font=(FONT_AR, fs(14))).pack(
                     side="right" if LANG=="ar" else "left")
 
-                info_frame = tk.Frame(f_row, bg="#FAFAFA")
+                info_frame = tk.Frame(f_row, bg=T.SURFACE)
                 info_frame.pack(side="right" if LANG=="ar" else "left", fill="x", expand=True, padx=8)
-                tk.Label(info_frame, text=fname, bg="#FAFAFA", font=(FONT_AR, fs(10)),
+                tk.Label(info_frame, text=fname, bg=T.SURFACE, fg=T.TEXT, font=(FONT_AR, fs(10)),
                         anchor="e" if LANG=="ar" else "w").pack(fill="x")
-                tk.Label(info_frame, text=size_str, bg="#FAFAFA", fg="#94A3B8",
+                tk.Label(info_frame, text=size_str, bg=T.SURFACE, fg=T.TEXT_MUTED,
                         font=(FONT_AR, fs(8)), anchor="e" if LANG=="ar" else "w").pack(fill="x")
 
                 def remove_f(i=idx):
@@ -2661,7 +2844,7 @@ if ($LaunchExe) {{
                     logger.info(f"File removed from list: {os.path.basename(removed_file)}")
                     update_file_list_ui()
 
-                tk.Button(f_row, text="✕", command=remove_f, bg="#FAFAFA", fg="#EF4444",
+                tk.Button(f_row, text="✕", command=remove_f, bg=T.SURFACE, fg=T.ERROR,
                          bd=0, cursor="hand2", font=(FONT_AR, fs(10))).pack(
                     side="left" if LANG=="ar" else "right", padx=5)
 
@@ -2688,26 +2871,26 @@ if ($LaunchExe) {{
             win.dnd_bind('<<Drop>>', lambda e: self._handle_multi_drop(e, update_file_list_ui))
 
         # ========== [2] تبويب النص — تصميم محسّن ==========
-        text_container = tk.Frame(tab_text, bg="white", padx=15, pady=12)
+        text_container = tk.Frame(tab_text, bg=T.SURFACE, padx=15, pady=12)
         text_container.pack(fill="both", expand=True)
 
-        text_header = tk.Frame(text_container, bg="white")
+        text_header = tk.Frame(text_container, bg=T.SURFACE)
         text_header.pack(fill="x", pady=(0, 8))
         tk.Label(text_header, text=t("text_input_hint"),
-                bg="white", font=(FONT_AR, fs(10), "bold"), fg="#475569").pack(
+                bg=T.SURFACE, font=(FONT_AR, fs(10), "bold"), fg=T.TEXT_SECOND).pack(
                     side="right" if LANG=="ar" else "left")
 
         # صندوق النص بتصميم أنيق
-        text_frame = tk.Frame(text_container, bg="#F8FAFC",
-                             highlightthickness=1, highlightbackground="#E2E8F0")
+        text_frame = tk.Frame(text_container, bg=T.SURFACE_DIM,
+                             highlightthickness=1, highlightbackground=T.BORDER_SOFT)
         text_frame.pack(fill="both", expand=True)
 
         self.send_text_area = tk.Text(text_frame, font=(FONT_AR, fs(12)), wrap="word",
                                 bd=0, relief="flat", padx=16, pady=14,
-                                bg="#F8FAFC", fg="#1E293B",
-                                insertbackground="#2E7D32", insertwidth=2,
+                                bg=T.SURFACE_DIM, fg=T.TEXT,
+                                insertbackground=T.GREEN, insertwidth=2,
                                 undo=True, highlightthickness=0,
-                                selectbackground="#BBF7D0", selectforeground="#14532D")
+                                selectbackground=T.GREEN_95, selectforeground=T.GREEN_DARK)
         self.send_text_area.pack(fill="both", expand=True)
 
         # دعم اللصق والاختصارات بشكل صريح ومرن
@@ -2725,7 +2908,7 @@ if ($LaunchExe) {{
         self.send_text_area.bind("<Control-A>", lambda e: self.send_text_area.tag_add("sel", "1.0", "end") or "break")
 
         # أزرار أدوات النص
-        text_tools = tk.Frame(text_container, bg="white")
+        text_tools = tk.Frame(text_container, bg=T.SURFACE)
         text_tools.pack(fill="x", pady=(8, 0))
 
         def paste_now():
@@ -2740,15 +2923,10 @@ if ($LaunchExe) {{
             logger.info("Text area cleared by user")
             self.send_text_area.delete("1.0", "end")
 
-        tk.Button(text_tools, text=t("paste_clipboard"), command=paste_now,
-                 bg="#F1F5F9", fg="#475569", bd=0, pady=6, padx=15,
-                 cursor="hand2", font=(FONT_AR, fs(9))).pack(
-                     side="right" if LANG=="ar" else "left")
-        tk.Button(text_tools, text=t("clear_all"),
-                 command=clear_now,
-                 bg="#FEF2F2", fg="#991B1B", bd=0, pady=6, padx=15,
-                 cursor="hand2", font=(FONT_AR, fs(9))).pack(
-                     side="right" if LANG=="ar" else "left", padx=10)
+        self._modern_button(text_tools, text=t("paste_clipboard"), command=paste_now,
+                            variant="muted", width=120).pack(side="right" if LANG=="ar" else "left")
+        self._modern_button(text_tools, text=t("clear_all"), command=clear_now,
+                            variant="danger", width=120).pack(side="right" if LANG=="ar" else "left", padx=10)
 
     def _handle_multi_drop(self, event, callback):
         """معالجة إفلات ملفات متعددة"""
@@ -2767,7 +2945,7 @@ if ($LaunchExe) {{
         except Exception as e:
             logger.error(f"Multi-drop error: {e}")
 
-    def _show_inline_message(self, window, message, color="#2E7D32", duration=2500):
+    def _show_inline_message(self, window, message, color=T.GREEN, duration=2500):
         """عرض رسالة تنبيه داخلية بدلاً من messagebox"""
         msg_label = tk.Label(window, text=message, bg=color, fg="white", font=(FONT_AR, fs(10), "bold"), pady=10)
         msg_label.pack(fill="x", side="bottom")
@@ -2776,7 +2954,7 @@ if ($LaunchExe) {{
         def remove():
             try:
                 msg_label.destroy()
-                if color == "#2E7D32": # إذا كان نجاح، نغلق النافذة بالكامل
+                if color == T.GREEN: # إذا كان نجاح، نغلق النافذة بالكامل
                     window.destroy()
             except: pass
 
@@ -2956,7 +3134,7 @@ if ($LaunchExe) {{
                 else: error_msg = f"فشل الإرسال: {error_msg[:80]}"
 
                 window.after(0, lambda m=error_msg: self._show_inline_message(window, f"❌ {m}", "#EF4444"))
-                window.after(0, lambda: btn.config(state="normal", text=t("send_now"), bg="#2E7D32"))
+                window.after(0, lambda: btn.config(state="normal", text=t("send_now"), bg=T.GREEN))
 
         asyncio.run(task())
 
@@ -3200,45 +3378,45 @@ if ($LaunchExe) {{
         dialog = tk.Toplevel(self.root)
         dialog.title(t("pairing_req"))
         dialog.geometry("460x300")
-        dialog.configure(bg="white")
+        dialog.configure(bg=T.MINT)
         dialog.transient(self.root)
         dialog.grab_set()
         dialog.attributes('-topmost', True)
         dialog.resizable(False, False)
 
         # Header بتدرج لوني
-        header = tk.Frame(dialog, bg="#2E7D32", height=65)
+        header = tk.Frame(dialog, bg=T.MINT, height=65)
         header.pack(fill="x")
         header.pack_propagate(False)
-        tk.Label(header, text="⚡ " + t("pairing_req"), bg="#2E7D32", fg="white",
+        tk.Label(header, text=t("pairing_req"), bg=T.MINT, fg=T.GREEN,
                  font=(FONT_AR, 15, "bold")).pack(pady=18)
 
         # محتوى — أيقونة الجهاز واسمه
-        content = tk.Frame(dialog, bg="white")
+        content = tk.Frame(dialog, bg=T.MINT)
         content.pack(fill="both", expand=True, padx=24, pady=16)
 
         # صف الجهاز مع أيقونة
-        device_row = tk.Frame(content, bg="#F0FFF4", pady=12, padx=16)
+        device_row = self._modern_card(content, selected=True)
         device_row.pack(fill="x", pady=(0, 12))
 
-        tk.Label(device_row, text="📱", font=(FONT_AR, 24), bg="#F0FFF4").pack(
-            side="right" if LANG=="ar" else "left", padx=(0, 12))
-        device_info = tk.Frame(device_row, bg="#F0FFF4")
+        tk.Label(device_row, text="📱", font=(FONT_AR, 24), bg=T.SURFACE).pack(
+            side="right" if LANG=="ar" else "left", padx=(16, 12), pady=12)
+        device_info = tk.Frame(device_row, bg=T.SURFACE)
         device_info.pack(side="right" if LANG=="ar" else "left", fill="x", expand=True)
-        tk.Label(device_info, text=device_name, bg="#F0FFF4",
-                font=(FONT_AR, fs(13), "bold"), fg="#166534").pack(
+        tk.Label(device_info, text=device_name, bg=T.SURFACE,
+                font=(FONT_AR, fs(13), "bold"), fg=T.GREEN_DARK).pack(
                     anchor="e" if LANG=="ar" else "w")
-        tk.Label(device_info, text="يطلب الإذن بالاتصال", bg="#F0FFF4",
-                font=(FONT_AR, fs(9)), fg="#4B5563").pack(
+        tk.Label(device_info, text="يطلب الإذن بالاتصال", bg=T.SURFACE,
+                font=(FONT_AR, fs(9)), fg=T.TEXT_SECOND).pack(
                     anchor="e" if LANG=="ar" else "w")
 
         tk.Label(content, text=t("pairing_msg").format(name=device_name),
-                 bg="white", font=(FONT_AR, fs(10)), fg="#475569", wraplength=400).pack(pady=(0, 4))
+                 bg=T.MINT, font=(FONT_AR, fs(10)), fg=T.TEXT_SECOND, wraplength=400).pack(pady=(0, 4))
 
         # عداد تنازلي (30 ثانية) — يُرفض تلقائياً
         countdown_var = tk.IntVar(value=30)
         countdown_label = tk.Label(content, text="⏱ ينتهي خلال 30 ثانية",
-                                  bg="white", fg="#9CA3AF", font=(FONT_AR, fs(8)))
+                                  bg=T.MINT, fg=T.TEXT_MUTED, font=(FONT_AR, fs(8)))
         countdown_label.pack()
 
         def tick():
@@ -3257,7 +3435,7 @@ if ($LaunchExe) {{
         dialog.after(1000, tick)
 
         # أزرار
-        btn_frame = tk.Frame(dialog, bg="white")
+        btn_frame = tk.Frame(dialog, bg=T.MINT)
         btn_frame.pack(fill="x", padx=24, pady=(0, 16))
 
         def approve():
@@ -3268,15 +3446,11 @@ if ($LaunchExe) {{
             result["approved"] = False
             dialog.destroy()
 
-        tk.Button(btn_frame, text=f"✗ {t('reject')}", command=reject,
-                  bg="#FEE2E2", fg="#991B1B", font=(FONT_AR, fs(10), "bold"),
-                  bd=0, pady=10, padx=24, cursor="hand2",
-                  activebackground="#FECACA").pack(side="left", padx=5, fill="x", expand=True)
+        self._modern_button(btn_frame, text=t("reject"), command=reject,
+                            variant="danger", width=160).pack(side="left", padx=5, fill="x", expand=True)
 
-        tk.Button(btn_frame, text=f"✓ {t('accept')}", command=approve,
-                  bg="#2E7D32", fg="white", font=(FONT_AR, fs(10), "bold"),
-                  bd=0, pady=10, padx=24, cursor="hand2",
-                  activebackground="#1B5E20", activeforeground="white").pack(side="right", padx=5, fill="x", expand=True)
+        self._modern_button(btn_frame, text=t("accept"), command=approve,
+                            variant="primary", width=160).pack(side="right", padx=5, fill="x", expand=True)
 
         # توسيط النافذة
         dialog.update_idletasks()

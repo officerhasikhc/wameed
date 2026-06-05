@@ -28,6 +28,23 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.IntentCompat
+import com.wameed.ui.components.PulsingDot
+import com.wameed.ui.components.WameedBadge
+import com.wameed.ui.components.WameedCard
+import com.wameed.ui.components.WameedPrimaryButton
+import com.wameed.ui.components.WameedProgressBar
+import com.wameed.ui.components.WameedSecondaryButton
+import com.wameed.ui.components.WameedTextAction
+import com.wameed.ui.theme.WameedError
+import com.wameed.ui.theme.WameedGreen
+import com.wameed.ui.theme.WameedGreen95
+import com.wameed.ui.theme.WameedMint
+import com.wameed.ui.theme.WameedSuccess
+import com.wameed.ui.theme.WameedSurface
+import com.wameed.ui.theme.WameedTextMuted
+import com.wameed.ui.theme.WameedTextPrimary
+import com.wameed.ui.theme.WameedTextSecondary
+import com.wameed.ui.theme.WameedTheme
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -46,16 +63,6 @@ sealed class SendState {
     data class Success(val message: String) : SendState()
     data class Error(val message: String) : SendState()
 }
-
-// ─────────────────────────────────────────
-// ألوان وميض — ثابتة
-// ─────────────────────────────────────────
-private val WameedGreen   = Color(0xFF2E7D32)
-private val WameedGreenLt = Color(0xFF43A047)
-private val SurfaceLight  = Color(0xFFF8F9FA)
-private val OnSurface     = Color(0xFF1C1B1F)
-private val OnSurfaceMed  = Color(0xFF49454F)
-private val OnSurfaceLow  = Color(0xFF79747E)
 
 // ─────────────────────────────────────────
 // نموذج البيانات
@@ -104,7 +111,7 @@ class ShareActivity : ComponentActivity() {
         Log.i("Wameed", "📤 فتح شاشة المشاركة | action=${intent.action} type=${intent.type}")
 
         setContent {
-            MaterialTheme {
+            WameedTheme {
                 WameedShareSheet(
                     shareData = shareData,
                     sender = sender,
@@ -204,16 +211,15 @@ fun WameedShareSheet(
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
-        containerColor = SurfaceLight,
+        containerColor = WameedMint,
         dragHandle = {
-            // Drag handle مخصص
             Box(
                 modifier = Modifier
                     .padding(top = 12.dp, bottom = 4.dp)
                     .width(40.dp)
                     .height(4.dp)
                     .clip(RoundedCornerShape(2.dp))
-                    .background(Color(0xFFCAC4D0))
+                    .background(WameedTextMuted.copy(alpha = 0.35f))
             )
         },
         shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp)
@@ -245,82 +251,63 @@ private fun SheetContent(
             .padding(bottom = 32.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-
-        // ─── Header ─────────────────────────
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(bottom = 20.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            // أيقونة وميض
-            Box(
+        WameedCard(modifier = Modifier.fillMaxWidth()) {
+            Row(
                 modifier = Modifier
-                    .size(40.dp)
-                    .clip(CircleShape)
-                    .background(WameedGreen),
-                contentAlignment = Alignment.Center
+                    .fillMaxWidth()
+                    .padding(bottom = 18.dp),
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Text(
-                    text = "و",
-                    color = Color.White,
-                    fontSize = 18.sp,
-                    fontWeight = FontWeight.Bold
+                PulsingDot(
+                    color = when (sendState) {
+                        is SendState.Success -> WameedSuccess
+                        is SendState.Error -> WameedError
+                        else -> WameedGreen
+                    },
+                    pulsing = sendState is SendState.Sending || sendState is SendState.Idle,
+                    size = 12.dp
                 )
-            }
 
-            Spacer(modifier = Modifier.width(12.dp))
+                Spacer(modifier = Modifier.width(12.dp))
 
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = stringResource(R.string.app_name),
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    color = OnSurface
-                )
-                Text(
-                    text = contentLabel(shareData),
-                    fontSize = 13.sp,
-                    color = OnSurfaceLow,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-            }
-
-            // زر الإلغاء — يظهر فقط أثناء الإرسال أو الخطأ
-            AnimatedVisibility(
-                visible = sendState is SendState.Sending || sendState is SendState.Error
-            ) {
-                TextButton(onClick = onCancel) {
+                Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = stringResource(R.string.cancel),
-                        color = OnSurfaceMed,
-                        fontSize = 14.sp
+                        text = stringResource(R.string.app_name),
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = WameedTextPrimary
+                    )
+                    Text(
+                        text = contentLabel(shareData),
+                        fontSize = 13.sp,
+                        color = WameedTextSecondary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                 }
+
+                AnimatedVisibility(visible = sendState is SendState.Sending || sendState is SendState.Error) {
+                    WameedTextAction(text = stringResource(R.string.cancel), color = WameedTextSecondary, onClick = onCancel)
+                }
             }
-        }
 
-        // ─── المحتوى حسب الحالة ─────────────
-        AnimatedContent(
-            targetState = sendState,
-            transitionSpec = {
-                fadeIn(tween(220)) togetherWith fadeOut(tween(180))
-            },
-            label = "state"
-        ) { state ->
-            when (state) {
-                is SendState.Idle -> LoadingIndicator()
-
-                is SendState.Sending -> SendingContent(state)
-
-                is SendState.Success -> SuccessContent(state.message)
-
-                is SendState.Error -> ErrorContent(
-                    message = state.message,
-                    onOpenSettings = onOpenSettings,
-                    onRetry = onCancel
-                )
+            AnimatedContent(
+                targetState = sendState,
+                transitionSpec = {
+                    fadeIn(tween(220)) togetherWith fadeOut(tween(180))
+                },
+                label = "state"
+            ) { state ->
+                when (state) {
+                    is SendState.Idle -> LoadingIndicator()
+                    is SendState.Sending -> SendingContent(state)
+                    is SendState.Success -> SuccessContent(state.message)
+                    is SendState.Error -> ErrorContent(
+                        message = state.message,
+                        onOpenSettings = onOpenSettings,
+                        onRetry = onCancel
+                    )
+                }
             }
         }
     }
@@ -359,7 +346,7 @@ private fun SendingContent(state: SendState.Sending) {
             text = state.label,
             fontSize = 15.sp,
             fontWeight = FontWeight.Medium,
-            color = OnSurface,
+            color = WameedTextPrimary,
             textAlign = TextAlign.Center,
             modifier = Modifier.padding(bottom = 4.dp)
         )
@@ -369,7 +356,7 @@ private fun SendingContent(state: SendState.Sending) {
             Text(
                 text = "${state.currentIndex} / ${state.total}",
                 fontSize = 12.sp,
-                color = OnSurfaceLow,
+                color = WameedTextSecondary,
                 modifier = Modifier.padding(bottom = 12.dp)
             )
         } else {
@@ -377,16 +364,7 @@ private fun SendingContent(state: SendState.Sending) {
         }
 
         // شريط التقدم
-        LinearProgressIndicator(
-            progress = { state.percent / 100f },
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(6.dp)
-                .clip(RoundedCornerShape(3.dp)),
-            color = WameedGreen,
-            trackColor = Color(0xFFE8F5E9),
-            strokeCap = StrokeCap.Round
-        )
+        WameedProgressBar(progress = state.percent / 100f, height = 8.dp)
 
         Spacer(modifier = Modifier.height(10.dp))
 
@@ -398,7 +376,7 @@ private fun SendingContent(state: SendState.Sending) {
             Text(
                 text = if (state.speedMbps > 0) "${"%.1f".format(state.speedMbps)} Mbps" else "",
                 fontSize = 12.sp,
-                color = OnSurfaceLow
+                color = WameedTextSecondary
             )
             Text(
                 text = "${state.percent}%",
@@ -487,7 +465,7 @@ private fun ErrorContent(
         Text(
             text = message,
             fontSize = 14.sp,
-            color = OnSurfaceMed,
+            color = WameedTextSecondary,
             textAlign = TextAlign.Center,
             lineHeight = 20.sp,
             modifier = Modifier.padding(horizontal = 8.dp)
@@ -504,33 +482,19 @@ private fun ErrorContent(
             message.contains("كمبيوتر") || message.contains("اتصال") || message.contains("شبكة") ||
             message.contains("connect", ignoreCase = true) || message.contains("network", ignoreCase = true)
         ) {
-            Button(
+            WameedPrimaryButton(
+                text = stringResource(R.string.open_settings),
                 onClick = onOpenSettings,
-                colors = ButtonDefaults.buttonColors(containerColor = WameedGreen),
-                shape = RoundedCornerShape(12.dp),
                 modifier = Modifier.fillMaxWidth()
-            ) {
-                Text(
-                    text = stringResource(R.string.open_settings),
-                    fontSize = 14.sp,
-                    modifier = Modifier.padding(vertical = 4.dp)
-                )
-            }
+            )
             Spacer(modifier = Modifier.height(8.dp))
         }
 
-        OutlinedButton(
+        WameedSecondaryButton(
+            text = stringResource(R.string.close),
             onClick = onRetry,
-            shape = RoundedCornerShape(12.dp),
-            modifier = Modifier.fillMaxWidth(),
-            colors = ButtonDefaults.outlinedButtonColors(contentColor = OnSurfaceMed)
-        ) {
-            Text(
-                text = stringResource(R.string.close),
-                fontSize = 14.sp,
-                modifier = Modifier.padding(vertical = 4.dp)
-            )
-        }
+            modifier = Modifier.fillMaxWidth()
+        )
 
         Spacer(modifier = Modifier.height(8.dp))
     }

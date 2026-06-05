@@ -29,15 +29,18 @@
     <string name="setup_needed">افتح وميض أولاً وأدخل IP الكمبيوتر</string>
     <string name="label_text_content">نص</string>
     <string name="app_title">⚡ وميض</string>
+    <string name="tab_home">الرئيسية</string>
     <string name="tab_connection">الاتصال</string>
     <string name="tab_history">السجل</string>
     <string name="tab_settings">الإعدادات</string>
     <string name="connecting_to">جارٍ الاتصال بـ %s&#8230;</string>
     <string name="connected_to">متصل بـ %s</string>
     <string name="connected_to_device">متصل بـ %s</string>
+    <string name="discovered_device">تم العثور على %s</string>
     <string name="connection_failed_to">فشل الاتصال بـ %s</string>
     <string name="searching_devices">جارٍ البحث عن أجهزة&#8230;</string>
     <string name="no_devices_found">لم يُعثر على أجهزة</string>
+    <string name="no_devices_hint">تأكد أن الهاتف والكمبيوتر على نفس الشبكة</string>
     <string name="choose_device">اختر جهازاً للاتصال</string>
     <string name="checking_connection">التحقق من الاتصال&#8230;</string>
     <string name="checking_connection_last">التحقق من الاتصال&#8230; (آخر اتصال %s)</string>
@@ -57,6 +60,14 @@
     <string name="manual_ip_label">IP:Port</string>
     <string name="manual_ip_placeholder">192.168.1.100:7788</string>
     <string name="connect">اتصال</string>
+    <string name="action_send_file">إرسال ملف</string>
+    <string name="action_refresh">تحديث</string>
+    <string name="action_manual_connect">اتصال يدوي بـ IP</string>
+    <string name="action_open">فتح</string>
+    <string name="action_cancel">إلغاء</string>
+    <string name="action_share">مشاركة</string>
+    <string name="section_devices">الأجهزة المتاحة</string>
+    <string name="section_recent_files">آخر الملفات</string>
     <string name="quick_action_send">إرسال</string>
     <string name="quick_action_refresh">تحديث</string>
     <string name="discovered_devices">الأجهزة المكتشفة</string>
@@ -84,6 +95,7 @@
     <!-- WameedSender & ConnectionService -->
     <string name="error_pc_not_configured">لم يتم ضبط عنوان الكمبيوتر</string>
     <string name="status_connected">متصل</string>
+    <string name="status_connecting">يتصل&#8230;</string>
     <string name="status_pc_unavailable">الكمبيوتر غير متاح</string>
     <string name="preparing">جارٍ التحضير&#8230;</string>
     <string name="error_file_too_large">الملف أكبر من 300 ميجابايت — غير مدعوم</string>
@@ -123,6 +135,7 @@
     <string name="text_received_from">✉️ نص مستلم من %s</string>
     <string name="url_received_from">🔗 رابط مستلم من %s</string>
     <string name="copy">نسخ</string>
+    <string name="delete">حذف</string>
     <string name="close">إغلاق</string>
     <string name="open">فتح</string>
     <string name="open_file_btn">فتح الملف</string>
@@ -146,7 +159,7 @@
     <string name="decline">رفض</string>
 
     <!-- تبويب المستلمات -->
-    <string name="tab_received">المستلمات</string>
+    <string name="tab_received">الملفات</string>
     <string name="no_received_files">لم تُستلم ملفات بعد</string>
     <string name="open_file">فتح</string>
     <string name="share_file">مشاركة</string>
@@ -214,6 +227,7 @@
     <string name="attached_files">الملفات المرفقة (%d)</string>
     <string name="status_connected_to">متصل بـ {name}</string>
     <string name="send_all">إرسال الكل</string>
+    <string name="send_complete">تم الإرسال ✓</string>
 
     <!-- سجل التشخيص وأدوات الشبكة -->
     <string name="diag_log_title">سجل التشخيص</string>

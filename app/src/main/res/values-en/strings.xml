@@ -29,15 +29,18 @@
     <string name="setup_needed">Open Wameed first and enter the PC IP</string>
     <string name="label_text_content">Text</string>
     <string name="app_title">⚡ Wameed</string>
+    <string name="tab_home">Home</string>
     <string name="tab_connection">Connection</string>
     <string name="tab_history">History</string>
     <string name="tab_settings">Settings</string>
     <string name="connecting_to">Connecting to %s&#8230;</string>
     <string name="connected_to">Connected to %s</string>
     <string name="connected_to_device">Connected to %s</string>
+    <string name="discovered_device">Found %s</string>
     <string name="connection_failed_to">Connection to %s failed</string>
     <string name="searching_devices">Searching for devices&#8230;</string>
     <string name="no_devices_found">No devices found</string>
+    <string name="no_devices_hint">Make sure your phone and PC are on the same network</string>
     <string name="choose_device">Choose a device to connect</string>
     <string name="checking_connection">Checking connection&#8230;</string>
     <string name="checking_connection_last">Checking connection&#8230; (last connected %s)</string>
@@ -57,6 +60,14 @@
     <string name="manual_ip_label">IP:Port</string>
     <string name="manual_ip_placeholder">192.168.1.100:7788</string>
     <string name="connect">Connect</string>
+    <string name="action_send_file">Send File</string>
+    <string name="action_refresh">Refresh</string>
+    <string name="action_manual_connect">Manual IP connection</string>
+    <string name="action_open">Open</string>
+    <string name="action_cancel">Cancel</string>
+    <string name="action_share">Share</string>
+    <string name="section_devices">Available devices</string>
+    <string name="section_recent_files">Recent files</string>
     <string name="quick_action_send">Send</string>
     <string name="quick_action_refresh">Refresh</string>
     <string name="discovered_devices">Discovered Devices</string>
@@ -84,6 +95,7 @@
     <!-- WameedSender & ConnectionService -->
     <string name="error_pc_not_configured">PC address not configured</string>
     <string name="status_connected">Connected</string>
+    <string name="status_connecting">Connecting&#8230;</string>
     <string name="status_pc_unavailable">PC unavailable</string>
     <string name="preparing">Preparing&#8230;</string>
     <string name="error_file_too_large">File is larger than 300 MB — not supported</string>
@@ -123,6 +135,7 @@
     <string name="text_received_from">✉️ Text received from %s</string>
     <string name="url_received_from">🔗 Link received from %s</string>
     <string name="copy">Copy</string>
+    <string name="delete">Delete</string>
     <string name="close">Close</string>
     <string name="open">Open</string>
     <string name="open_file_btn">Open File</string>
@@ -146,7 +159,7 @@
     <string name="decline">Decline</string>
 
     <!-- Received tab -->
-    <string name="tab_received">Received</string>
+    <string name="tab_received">Files</string>
     <string name="no_received_files">No files received yet</string>
     <string name="open_file">Open</string>
     <string name="share_file">Share</string>
@@ -193,6 +206,7 @@
     <string name="error_too_many_files">You cannot select more than 10 files</string>
     <string name="attached_files">Attached files (%d)</string>
     <string name="send_all">Send all</string>
+    <string name="send_complete">Sent ✓</string>
 
     <!-- Diagnostics and network tools -->
     <string name="diag_log_title">Diagnostic Log</string>

@@ -25,6 +25,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -111,7 +112,28 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.wameed.ui.components.PulsingDot
+import com.wameed.ui.components.SectionLabel
+import com.wameed.ui.components.WameedBadge
+import com.wameed.ui.components.WameedCard
+import com.wameed.ui.components.WameedEmptyState
+import com.wameed.ui.components.WameedPrimaryButton
+import com.wameed.ui.components.WameedProgressBar
+import com.wameed.ui.components.WameedScreen
+import com.wameed.ui.components.WameedSettingsRow
+import com.wameed.ui.components.WameedTextAction
+import com.wameed.ui.theme.WameedError
+import com.wameed.ui.theme.WameedGreen
+import com.wameed.ui.theme.WameedGreen95
+import com.wameed.ui.theme.WameedInfo
+import com.wameed.ui.theme.WameedMint
+import com.wameed.ui.theme.WameedSuccess
+import com.wameed.ui.theme.WameedSurface
+import com.wameed.ui.theme.WameedTextMuted
+import com.wameed.ui.theme.WameedTextPrimary
+import com.wameed.ui.theme.WameedTextSecondary
 import com.wameed.ui.theme.WameedTheme
+import com.wameed.ui.theme.WameedWarning
 import com.wameed.BuildConfig
 import com.google.firebase.Firebase
 import com.google.firebase.crashlytics.crashlytics
@@ -589,39 +611,29 @@ fun MainScreen(sender: WameedSender, discovery: DeviceDiscovery, updateManager: 
     Scaffold(
         topBar = {
             CenterAlignedTopAppBar(
-                title = { Text(stringResource(R.string.app_title), fontWeight = FontWeight.ExtraBold, color = Color(0xFF2E7D32)) },
-                colors = TopAppBarDefaults.centerAlignedTopAppBarColors(containerColor = Color.White)
+                title = {
+                    Text(
+                        stringResource(R.string.app_title),
+                        fontWeight = FontWeight.ExtraBold,
+                        color = WameedGreen,
+                        fontSize = 22.sp
+                    )
+                },
+                colors = TopAppBarDefaults.centerAlignedTopAppBarColors(containerColor = WameedMint)
             )
         },
         bottomBar = {
-            NavigationBar(containerColor = Color.White) {
-                val tabNames = arrayOf("الاتصال", "السجل", "المستلم", "الإعدادات")
-                NavigationBarItem(
-                    selected = selectedTab == 0,
-                    onClick = { selectedTab = 0; Log.i("Wameed", "📄 انتقال إلى: ${tabNames[0]}") },
-                    icon = { Icon(Icons.Default.Home, null) },
-                    label = { Text(stringResource(R.string.tab_connection)) }
-                )
-                NavigationBarItem(
-                    selected = selectedTab == 1,
-                    onClick = { selectedTab = 1; Log.i("Wameed", "📄 انتقال إلى: ${tabNames[1]}") },
-                    icon = { Icon(Icons.AutoMirrored.Filled.List, null) },
-                    label = { Text(stringResource(R.string.tab_history)) }
-                )
-                NavigationBarItem(
-                    selected = selectedTab == 2,
-                    onClick = { selectedTab = 2; Log.i("Wameed", "📄 انتقال إلى: ${tabNames[2]}") },
-                    icon = { Icon(Icons.Default.Download, null) },
-                    label = { Text(stringResource(R.string.tab_received)) }
-                )
-                NavigationBarItem(
-                    selected = selectedTab == 3,
-                    onClick = { selectedTab = 3; Log.i("Wameed", "📄 انتقال إلى: ${tabNames[3]}") },
-                    icon = { Icon(Icons.Default.Settings, null) },
-                    label = { Text(stringResource(R.string.tab_settings)) }
+            if (selectedTab in 0..3) {
+                WameedBottomBar(
+                    selectedTab = selectedTab,
+                    onSelect = { tab ->
+                        selectedTab = tab
+                        Log.i("Wameed", "انتقال إلى تبويب $tab")
+                    }
                 )
             }
-        }
+        },
+        containerColor = WameedMint
     ) { padding ->
         when (selectedTab) {
             0 -> ConnectionTab(
@@ -758,6 +770,54 @@ fun MainScreen(sender: WameedSender, discovery: DeviceDiscovery, updateManager: 
 }
 
 @Composable
+private fun WameedBottomBar(
+    selectedTab: Int,
+    onSelect: (Int) -> Unit
+) {
+    val tabs = listOf(
+        0 to stringResource(R.string.tab_home),
+        1 to stringResource(R.string.tab_history),
+        2 to stringResource(R.string.tab_received),
+        3 to stringResource(R.string.tab_settings)
+    )
+
+    Surface(
+        color = WameedSurface,
+        shadowElevation = 8.dp,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(68.dp)
+                .padding(horizontal = 8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            tabs.forEach { (index, label) ->
+                val active = selectedTab == index
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(48.dp)
+                        .padding(horizontal = 4.dp)
+                        .clip(RoundedCornerShape(24.dp))
+                        .background(if (active) WameedGreen95 else Color.Transparent)
+                        .clickable { onSelect(index) },
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = label,
+                        fontSize = 13.sp,
+                        fontWeight = if (active) FontWeight.Bold else FontWeight.Medium,
+                        color = if (active) WameedGreen else WameedTextSecondary
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
 fun ConnectionTab(
     modifier: Modifier,
     connectionState: ConnectionState,
@@ -774,120 +834,102 @@ fun ConnectionTab(
     isSendingBatch: Boolean = false,
     onDiagnose: () -> Unit = {}
 ) {
-    val scrollState = rememberScrollState()
-
     Column(
         modifier = modifier
             .fillMaxSize()
-            .background(Color(0xFFF8FAFC))
-            .verticalScroll(scrollState)
+            .background(WameedMint)
             .padding(horizontal = 20.dp, vertical = 16.dp)
     ) {
         StatusCard(connectionState, statusText, selectedDevice)
-        Spacer(modifier = Modifier.height(20.dp))
+        Spacer(Modifier.height(18.dp))
 
         if (selectedUris.isNotEmpty()) {
-            Surface(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(16.dp),
-                color = Color.White,
-                shadowElevation = 1.dp
-            ) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    Text(
-                        stringResource(R.string.attached_files, selectedUris.size),
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 14.sp,
-                        color = Color.Gray
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    selectedUris.forEach { uri ->
-                        Row(
-                            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
+            WameedCard(modifier = Modifier.fillMaxWidth()) {
+                Text(
+                    stringResource(R.string.attached_files, selectedUris.size),
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 14.sp,
+                    color = WameedTextPrimary
+                )
+                Spacer(Modifier.height(10.dp))
+                selectedUris.forEach { uri ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(Modifier.weight(1f)) {
                             Text(
                                 uri.path?.split("/")?.last() ?: uri.toString(),
-                                modifier = Modifier.weight(1f),
                                 maxLines = 1,
-                                fontSize = 13.sp
+                                fontSize = 13.sp,
+                                color = WameedTextPrimary
                             )
-                            IconButton(
-                                onClick = { onRemoveUri(uri) }, 
-                                modifier = Modifier.size(24.dp),
-                                enabled = !isSendingBatch
-                            ) {
-                                Icon(
-                                    Icons.Default.Delete, 
-                                    null, 
-                                    tint = if (isSendingBatch) Color.Gray else Color.Red, 
-                                    modifier = Modifier.size(16.dp)
-                                )
-                            }
+                            Text(
+                                uri.scheme.orEmpty(),
+                                maxLines = 1,
+                                fontSize = 11.sp,
+                                color = WameedTextMuted
+                            )
                         }
-                    }
-                    Spacer(modifier = Modifier.height(12.dp))
-                    Button(
-                        onClick = onConfirmSend,
-                        modifier = Modifier.fillMaxWidth(),
-                        enabled = connectionState == ConnectionState.Connected && !isSendingBatch,
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF43A047)),
-                        shape = RoundedCornerShape(12.dp)
-                    ) {
-                        if (isSendingBatch) {
-                            CircularProgressIndicator(Modifier.size(18.dp), color = Color.White, strokeWidth = 2.dp)
-                        } else {
-                            Icon(Icons.AutoMirrored.Filled.Send, null, Modifier.size(18.dp))
+                        IconButton(
+                            onClick = { onRemoveUri(uri) },
+                            modifier = Modifier.size(34.dp),
+                            enabled = !isSendingBatch
+                        ) {
+                            Icon(
+                                Icons.Default.Delete,
+                                null,
+                                tint = if (isSendingBatch) WameedTextMuted else WameedError,
+                                modifier = Modifier.size(18.dp)
+                            )
                         }
-                        Spacer(Modifier.width(8.dp))
-                        Text(if (isSendingBatch) stringResource(R.string.sending) else stringResource(R.string.send_all))
                     }
                 }
+                Spacer(Modifier.height(12.dp))
+                WameedPrimaryButton(
+                    text = if (isSendingBatch) stringResource(R.string.sending) else stringResource(R.string.send_all),
+                    onClick = onConfirmSend,
+                    enabled = connectionState == ConnectionState.Connected && !isSendingBatch,
+                    loading = isSendingBatch
+                )
             }
-            Spacer(modifier = Modifier.height(20.dp))
+            Spacer(Modifier.height(18.dp))
         }
 
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            QuickAction(Modifier.weight(1f), stringResource(R.string.quick_action_send), Icons.Default.Add,
-                Color(0xFF43A047), connectionState == ConnectionState.Connected && !isSendingBatch) { onSend() }
-            QuickAction(Modifier.weight(1f), stringResource(R.string.quick_action_refresh), Icons.Default.Refresh,
-                Color(0xFF3B82F6), connectionState != ConnectionState.Searching && !isSendingBatch) { onRefresh() }
+        Row(
+            Modifier.fillMaxWidth(),
+            Arrangement.SpaceBetween,
+            Alignment.CenterVertically
+        ) {
+            SectionLabel(stringResource(R.string.section_devices))
+            WameedTextAction(
+                text = stringResource(R.string.action_refresh),
+                onClick = onRefresh,
+                enabled = connectionState != ConnectionState.Searching && !isSendingBatch
+            )
         }
-
-        Spacer(modifier = Modifier.height(24.dp))
-
-        Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween, Alignment.CenterVertically) {
-            Text(stringResource(R.string.discovered_devices), fontWeight = FontWeight.Bold, color = Color.Gray, fontSize = 14.sp)
-            TextButton(onClick = onManualConnect) {
-                Icon(Icons.Default.Edit, null, modifier = Modifier.size(14.dp))
-                Spacer(modifier = Modifier.width(4.dp))
-                Text(stringResource(R.string.manual_entry), fontSize = 12.sp)
-            }
-        }
-        Spacer(modifier = Modifier.height(8.dp))
+        Spacer(Modifier.height(8.dp))
 
         Box(modifier = Modifier.weight(1f)) {
             when {
-                connectionState == ConnectionState.Searching -> {
-                    Column(Modifier.fillMaxWidth().padding(vertical = 32.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally) {
-                        CircularProgressIndicator(Modifier.size(36.dp), color = Color(0xFF43A047), strokeWidth = 3.dp)
-                        Spacer(Modifier.height(12.dp))
-                        Text(stringResource(R.string.searching_devices), color = Color.Gray, fontSize = 13.sp)
-                    }
-                }
+                connectionState == ConnectionState.Searching && devices.isEmpty() ->
+                    WameedEmptyState(
+                        title = stringResource(R.string.searching_devices),
+                        showProgress = true
+                    )
                 devices.isEmpty() && connectionState != ConnectionState.Connecting -> {
-                    Column(Modifier.fillMaxWidth().padding(vertical = 32.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally) {
-                        Icon(Icons.Default.Search, null, tint = Color(0xFFD1D5DB), modifier = Modifier.size(48.dp))
-                        Spacer(Modifier.height(12.dp))
-                        Text(stringResource(R.string.no_devices_found_detail),
-                            color = Color.Gray, fontSize = 13.sp, textAlign = TextAlign.Center)
-                    }
+                    WameedEmptyState(
+                        title = stringResource(R.string.no_devices_found),
+                        subtitle = stringResource(R.string.no_devices_hint)
+                    )
                 }
                 else -> {
-                    LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    LazyColumn(
+                        verticalArrangement = Arrangement.spacedBy(10.dp),
+                        contentPadding = PaddingValues(vertical = 4.dp)
+                    ) {
                         items(devices.values.toList(), key = { it.address }) { device ->
                             val isSel = selectedDevice?.address == device.address
                             DeviceItem(
@@ -902,25 +944,30 @@ fun ConnectionTab(
             }
         }
 
+        Spacer(Modifier.height(12.dp))
+
+        WameedPrimaryButton(
+            text = if (selectedUris.isEmpty()) stringResource(R.string.action_send_file) else stringResource(R.string.send_all),
+            onClick = { if (selectedUris.isEmpty()) onSend() else onConfirmSend() },
+            enabled = connectionState == ConnectionState.Connected && !isSendingBatch,
+            loading = isSendingBatch
+        )
+        Spacer(Modifier.height(6.dp))
+        WameedTextAction(
+            text = stringResource(R.string.action_manual_connect),
+            onClick = onManualConnect,
+            modifier = Modifier.fillMaxWidth(),
+            color = WameedTextSecondary
+        )
+
         if (connectionState == ConnectionState.Failed) {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(onClick = { selectedDevice?.let { onConnect(it) } ?: onRefresh() },
-                    modifier = Modifier.weight(1f),
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFEF4444)),
-                    shape = RoundedCornerShape(16.dp)) {
-                    Icon(Icons.Default.Refresh, null, Modifier.size(18.dp))
-                    Spacer(Modifier.width(6.dp))
-                    Text(stringResource(R.string.quick_action_refresh))
-                }
-                OutlinedButton(onClick = onDiagnose,
-                    modifier = Modifier.weight(1f),
-                    shape = RoundedCornerShape(16.dp),
-                    border = BorderStroke(1.dp, Color(0xFF3B82F6))) {
-                    Icon(Icons.Default.NetworkCheck, null, Modifier.size(18.dp), tint = Color(0xFF3B82F6))
-                    Spacer(Modifier.width(6.dp))
-                    Text(stringResource(R.string.diag_fix_hint), color = Color(0xFF3B82F6), fontSize = 12.sp)
-                }
-            }
+            Spacer(Modifier.height(6.dp))
+            WameedTextAction(
+                text = stringResource(R.string.diag_fix_hint),
+                onClick = onDiagnose,
+                modifier = Modifier.fillMaxWidth(),
+                color = WameedInfo
+            )
             Spacer(Modifier.height(8.dp))
         }
     }
@@ -934,35 +981,32 @@ fun HistoryTab(modifier: Modifier) {
     Column(
         modifier = modifier
             .fillMaxSize()
-            .background(Color(0xFFF8FAFC))
+            .background(WameedMint)
             .padding(horizontal = 20.dp, vertical = 16.dp)
     ) {
         Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween, Alignment.CenterVertically) {
-            Text(stringResource(R.string.history_title), fontWeight = FontWeight.Bold, fontSize = 18.sp,
-                color = Color(0xFF2E7D32))
+            Text(
+                stringResource(R.string.history_title),
+                fontWeight = FontWeight.Bold,
+                fontSize = 20.sp,
+                color = WameedGreen
+            )
             if (history.isNotEmpty()) {
-                IconButton(onClick = {
+                WameedTextAction(text = stringResource(R.string.clear_history), color = WameedError, onClick = {
                     WameedPrefs.clearHistory(context)
                     history = emptyList()
-                }) {
-                    Icon(Icons.Default.Delete, stringResource(R.string.clear_history), tint = Color(0xFFEF4444))
-                }
+                })
             }
         }
         Spacer(Modifier.height(12.dp))
 
         if (history.isEmpty()) {
-            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Icon(Icons.AutoMirrored.Filled.List, null, tint = Color(0xFFD1D5DB), modifier = Modifier.size(48.dp))
-                    Spacer(Modifier.height(12.dp))
-                    Text(stringResource(R.string.no_history), color = Color.Gray, fontSize = 14.sp)
-                }
-            }
+            WameedEmptyState(title = stringResource(R.string.no_history))
         } else {
             LazyColumn(
                 modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+                contentPadding = PaddingValues(vertical = 4.dp)
             ) {
                 items(history, key = { "${it.time}_${it.filename}" }) { entry ->
                     HistoryItem(entry)
@@ -974,31 +1018,33 @@ fun HistoryTab(modifier: Modifier) {
 
 @Composable
 fun HistoryItem(entry: WameedPrefs.HistoryEntry) {
-    val statusColor = if (entry.status == "success") Color(0xFF22C55E) else Color(0xFFEF4444)
-    val statusIcon = if (entry.status == "success") "\u2713" else "\u2717"
+    val statusColor = if (entry.status == "success") WameedSuccess else WameedError
     val sizeText = formatSize(entry.size)
-    val dirIcon = if (entry.direction == "received") "⬇" else "⬆"
     val dirText = if (entry.direction == "received") stringResource(R.string.direction_received) else stringResource(R.string.direction_sent)
-    val dirColor = if (entry.direction == "received") Color(0xFF3B82F6) else Color(0xFF43A047)
+    val dirColor = if (entry.direction == "received") WameedInfo else WameedGreen
 
-    Surface(
+    WameedCard(
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(14.dp),
-        color = Color.White,
-        shadowElevation = 1.dp
+        contentPadding = PaddingValues(14.dp)
     ) {
-        Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text(statusIcon, color = statusColor, fontSize = 18.sp, fontWeight = FontWeight.Bold)
-            Spacer(Modifier.width(8.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            PulsingDot(color = statusColor, pulsing = false, size = 9.dp)
+            Spacer(Modifier.width(10.dp))
             Column(Modifier.weight(1f)) {
-                Text(entry.filename, fontWeight = FontWeight.SemiBold, fontSize = 14.sp, maxLines = 1)
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(dirIcon, color = dirColor, fontSize = 10.sp, fontWeight = FontWeight.Bold)
-                    Spacer(Modifier.width(4.dp))
-                    Text("$dirText  •  ${entry.type}  •  $sizeText", fontSize = 11.sp, color = Color.Gray)
-                }
+                Text(
+                    entry.filename,
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = 14.sp,
+                    color = WameedTextPrimary,
+                    maxLines = 1
+                )
+                Text(
+                    "$dirText  •  ${entry.type}  •  $sizeText",
+                    fontSize = 11.sp,
+                    color = WameedTextSecondary
+                )
             }
-            Text(entry.time.substringAfter(" "), fontSize = 11.sp, color = Color.Gray)
+            WameedBadge(text = entry.time.substringAfter(" "), color = dirColor)
         }
     }
 }
@@ -1018,41 +1064,35 @@ fun ReceivedTab(modifier: Modifier) {
     Column(
         modifier = modifier
             .fillMaxSize()
-            .background(Color(0xFFF8FAFC))
+            .background(WameedMint)
             .padding(horizontal = 20.dp, vertical = 16.dp)
     ) {
         Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween, Alignment.CenterVertically) {
-            Text(stringResource(R.string.received_files_title), fontWeight = FontWeight.Bold,
-                fontSize = 18.sp, color = Color(0xFF2E7D32))
-            TextButton(onClick = {
+            Text(
+                stringResource(R.string.received_files_title),
+                fontWeight = FontWeight.Bold,
+                fontSize = 20.sp,
+                color = WameedGreen
+            )
+            WameedTextAction(text = stringResource(R.string.open_wameed_folder), onClick = {
                 openWameedFolder(context)
-            }) {
-                Icon(Icons.Default.Download, null, modifier = Modifier.size(16.dp))
-                Spacer(Modifier.width(4.dp))
-                Text(stringResource(R.string.open_wameed_folder), fontSize = 12.sp)
-            }
+            })
         }
-        Spacer(Modifier.height(4.dp))
+        Spacer(Modifier.height(2.dp))
 
-        TextButton(onClick = { files = listReceivedFiles(context) }) {
-            Icon(Icons.Default.Refresh, null, modifier = Modifier.size(14.dp))
-            Spacer(Modifier.width(4.dp))
-            Text(stringResource(R.string.quick_action_refresh), fontSize = 12.sp)
+        Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween, Alignment.CenterVertically) {
+            SectionLabel(stringResource(R.string.section_recent_files))
+            WameedTextAction(text = stringResource(R.string.action_refresh), onClick = { files = listReceivedFiles(context) })
         }
         Spacer(Modifier.height(8.dp))
 
         if (files.isEmpty()) {
-            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Icon(Icons.Default.Download, null, tint = Color(0xFFD1D5DB), modifier = Modifier.size(48.dp))
-                    Spacer(Modifier.height(12.dp))
-                    Text(stringResource(R.string.no_received_files), color = Color.Gray, fontSize = 14.sp)
-                }
-            }
+            WameedEmptyState(title = stringResource(R.string.no_received_files))
         } else {
             LazyColumn(
                 modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+                contentPadding = PaddingValues(vertical = 4.dp)
             ) {
                 items(files, key = { it.uri.toString() }) { file ->
                     ReceivedFileItem(file, context)
@@ -1076,40 +1116,43 @@ fun ReceivedFileItem(file: ReceivedFileInfo, context: Context) {
     val dateText = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US)
         .format(Date(file.dateModified * 1000))
 
-    Surface(
+    WameedCard(
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(14.dp),
-        color = Color.White,
-        shadowElevation = 1.dp
+        onClick = { openFile(context, file) },
+        contentPadding = PaddingValues(horizontal = 18.dp, vertical = 14.dp)
     ) {
-        Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
-            Box(
-                modifier = Modifier
-                    .size(40.dp)
-                    .clip(RoundedCornerShape(10.dp))
-                    .background(Color(0xFF3B82F6).copy(alpha = 0.1f)),
-                contentAlignment = Alignment.Center
-            ) {
-                Text(
-                    fileTypeEmoji(file.mimeType),
-                    fontSize = 18.sp
-                )
-            }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            WameedFileTypeDot(file.mimeType)
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
-                Text(file.name, fontWeight = FontWeight.SemiBold, fontSize = 14.sp, maxLines = 1)
-                Text("$sizeText  \u2022  $dateText", fontSize = 11.sp, color = Color.Gray)
+                Text(
+                    file.name,
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = 14.sp,
+                    color = WameedTextPrimary,
+                    maxLines = 1
+                )
+                Text("$sizeText  •  $dateText", fontSize = 11.sp, color = WameedTextSecondary)
             }
-            IconButton(onClick = { openFile(context, file) }, modifier = Modifier.size(36.dp)) {
-                Icon(Icons.AutoMirrored.Filled.OpenInNew, stringResource(R.string.open_file),
-                    tint = Color(0xFF3B82F6), modifier = Modifier.size(20.dp))
-            }
-            IconButton(onClick = { shareFile(context, file) }, modifier = Modifier.size(36.dp)) {
-                Icon(Icons.Default.Share, stringResource(R.string.share_file),
-                    tint = Color(0xFF43A047), modifier = Modifier.size(20.dp))
-            }
+            WameedTextAction(text = stringResource(R.string.action_open), onClick = { openFile(context, file) })
+            WameedTextAction(text = stringResource(R.string.action_share), onClick = { shareFile(context, file) })
         }
     }
+}
+
+@Composable
+private fun WameedFileTypeDot(mimeType: String) {
+    PulsingDot(
+        color = when {
+            mimeType.startsWith("image/") -> WameedInfo
+            mimeType.startsWith("video/") -> WameedWarning
+            mimeType.startsWith("audio/") -> WameedSuccess
+            mimeType.contains("pdf") -> WameedError
+            else -> WameedGreen
+        },
+        pulsing = false,
+        size = 9.dp
+    )
 }
 
 private fun fileTypeEmoji(mimeType: String): String {
@@ -1289,149 +1332,97 @@ private fun getMimeType(filename: String): String {
 fun SettingsTab(modifier: Modifier, updateManager: WameedUpdateManager, onShowTrusted: () -> Unit, onShowDiagLog: () -> Unit = {}, onShowNetDiag: () -> Unit = {}) {
     val context = LocalContext.current
     var displayMode by remember { mutableStateOf(WameedPrefs.getDisplayMode(context)) }
+    var currentLang by remember { mutableStateOf(WameedPrefs.getLanguage(context)) }
+    var keepAlive by remember { mutableStateOf(WameedPrefs.isKeepAliveEnabled(context)) }
+    val updateState by updateManager.updateState.collectAsState()
+    val scope = rememberCoroutineScope()
 
     val scrollState = rememberScrollState()
 
     Column(
         modifier = modifier
             .fillMaxSize()
-            .background(Color(0xFFF8FAFC))
+            .background(WameedMint)
             .verticalScroll(scrollState)
             .padding(horizontal = 20.dp, vertical = 16.dp)
     ) {
-        Text(stringResource(R.string.settings_title), fontWeight = FontWeight.Bold, fontSize = 18.sp, color = Color(0xFF2E7D32))
-        Spacer(Modifier.height(20.dp))
+        Text(stringResource(R.string.settings_title), fontWeight = FontWeight.Bold, fontSize = 20.sp, color = WameedGreen)
+        Spacer(Modifier.height(16.dp))
 
-        // Language toggle card
-        var currentLang by remember { mutableStateOf(WameedPrefs.getLanguage(context)) }
-        Surface(Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp),
-            color = Color.White, shadowElevation = 1.dp) {
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .clickable {
-                        val newLang = if (currentLang == "ar") "en" else "ar"
-                        WameedPrefs.setLanguage(context, newLang)
-                        currentLang = newLang
-                        (context as? android.app.Activity)?.recreate()
-                    }
-                    .padding(18.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column(Modifier.weight(1f)) {
-                    Text(stringResource(R.string.language_title),
-                        fontWeight = FontWeight.Bold, fontSize = 15.sp)
-                    Spacer(Modifier.height(4.dp))
-                    Text(stringResource(R.string.language_detail),
-                        fontSize = 12.sp, color = Color.Gray)
-                }
-                Surface(
-                    shape = RoundedCornerShape(12.dp),
-                    color = Color(0xFF2E7D32),
-                    modifier = Modifier.size(44.dp)
+        WameedSettingsRow(
+            title = stringResource(R.string.language_title),
+            subtitle = stringResource(R.string.language_detail),
+            onClick = {
+                val newLang = if (currentLang == "ar") "en" else "ar"
+                WameedPrefs.setLanguage(context, newLang)
+                currentLang = newLang
+                (context as? android.app.Activity)?.recreate()
+            },
+            action = {
+                WameedBadge(text = if (currentLang == "ar") "E" else "ع", color = WameedGreen)
+            }
+        )
+
+        Spacer(Modifier.height(14.dp))
+
+        WameedCard(modifier = Modifier.fillMaxWidth()) {
+            Text(stringResource(R.string.pc_display_mode), fontWeight = FontWeight.Bold, fontSize = 15.sp, color = WameedTextPrimary)
+            Spacer(Modifier.height(4.dp))
+            Text(stringResource(R.string.pc_display_mode_detail), fontSize = 12.sp, color = WameedTextSecondary)
+            Spacer(Modifier.height(14.dp))
+
+            listOf(
+                "open" to stringResource(R.string.mode_open),
+                "path" to stringResource(R.string.mode_path),
+                "both" to stringResource(R.string.mode_both),
+                "none" to stringResource(R.string.mode_none)
+            ).forEach { (value, label) ->
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(12.dp))
+                        .clickable {
+                            displayMode = value
+                            WameedPrefs.setDisplayMode(context, value)
+                        }
+                        .background(if (displayMode == value) WameedGreen95 else Color.Transparent)
+                        .padding(horizontal = 10.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Box(contentAlignment = Alignment.Center) {
-                        Text(
-                            text = if (currentLang == "ar") "E" else "ع",
-                            color = Color.White,
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 18.sp
-                        )
-                    }
+                    RadioButton(
+                        selected = displayMode == value,
+                        onClick = {
+                            displayMode = value
+                            WameedPrefs.setDisplayMode(context, value)
+                        },
+                        colors = RadioButtonDefaults.colors(selectedColor = WameedGreen)
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(label, fontSize = 14.sp, color = WameedTextPrimary)
                 }
             }
         }
 
-        Spacer(Modifier.height(16.dp))
+        Spacer(Modifier.height(14.dp))
 
-        Surface(Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp),
-            color = Color.White, shadowElevation = 1.dp) {
-            Column(Modifier.padding(18.dp)) {
-                Text(stringResource(R.string.pc_display_mode), fontWeight = FontWeight.Bold, fontSize = 15.sp)
-                Spacer(Modifier.height(4.dp))
-                Text(stringResource(R.string.pc_display_mode_detail), fontSize = 12.sp, color = Color.Gray)
-                Spacer(Modifier.height(14.dp))
+        WameedSettingsRow(
+            title = stringResource(R.string.trusted_devices_title),
+            subtitle = stringResource(R.string.trusted_devices_detail),
+            onClick = onShowTrusted,
+            action = { WameedBadge(text = stringResource(R.string.open), color = WameedGreen) }
+        )
 
-                listOf(
-                    "open" to stringResource(R.string.mode_open),
-                    "path" to stringResource(R.string.mode_path),
-                    "both" to stringResource(R.string.mode_both),
-                    "none" to stringResource(R.string.mode_none)
-                ).forEach { (value, label) ->
-                    Row(
-                        Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(10.dp))
-                            .clickable {
-                                displayMode = value
-                                WameedPrefs.setDisplayMode(context, value)
-                            }
-                            .background(
-                                if (displayMode == value) Color(0xFFE8F5E9) else Color.Transparent
-                            )
-                            .padding(horizontal = 12.dp, vertical = 10.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        RadioButton(
-                            selected = displayMode == value,
-                            onClick = {
-                                displayMode = value
-                                WameedPrefs.setDisplayMode(context, value)
-                            },
-                            colors = RadioButtonDefaults.colors(selectedColor = Color(0xFF2E7D32))
-                        )
-                        Spacer(Modifier.width(8.dp))
-                        Text(label, fontSize = 14.sp)
-                    }
-                }
-            }
-        }
+        Spacer(Modifier.height(14.dp))
 
-        Spacer(Modifier.height(16.dp))
-
-        Surface(Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp),
-            color = Color.White, shadowElevation = 1.dp) {
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .clickable { onShowTrusted() }
-                    .padding(18.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column(Modifier.weight(1f)) {
-                    Text(stringResource(R.string.trusted_devices_title),
-                        fontWeight = FontWeight.Bold, fontSize = 15.sp)
-                    Spacer(Modifier.height(4.dp))
-                    Text(stringResource(R.string.trusted_devices_detail),
-                        fontSize = 12.sp, color = Color.Gray)
-                }
-                Icon(Icons.AutoMirrored.Filled.List, null, tint = Color.Gray)
-            }
-        }
-
-        Spacer(Modifier.height(16.dp))
-
-        var keepAlive by remember { mutableStateOf(WameedPrefs.isKeepAliveEnabled(context)) }
-        Surface(Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp),
-            color = Color.White, shadowElevation = 1.dp) {
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .clickable {
-                        keepAlive = !keepAlive
-                        WameedPrefs.setKeepAliveEnabled(context, keepAlive)
-                        if (!keepAlive) WameedConnectionService.stop(context)
-                    }
-                    .padding(18.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column(Modifier.weight(1f)) {
-                    Text(stringResource(R.string.keep_alive_title),
-                        fontWeight = FontWeight.Bold, fontSize = 15.sp)
-                    Spacer(Modifier.height(4.dp))
-                    Text(stringResource(R.string.keep_alive_detail),
-                        fontSize = 12.sp, color = Color.Gray)
-                }
+        WameedSettingsRow(
+            title = stringResource(R.string.keep_alive_title),
+            subtitle = stringResource(R.string.keep_alive_detail),
+            onClick = {
+                keepAlive = !keepAlive
+                WameedPrefs.setKeepAliveEnabled(context, keepAlive)
+                if (!keepAlive) WameedConnectionService.stop(context)
+            },
+            action = {
                 Switch(
                     checked = keepAlive,
                     onCheckedChange = {
@@ -1439,186 +1430,85 @@ fun SettingsTab(modifier: Modifier, updateManager: WameedUpdateManager, onShowTr
                         WameedPrefs.setKeepAliveEnabled(context, it)
                         if (!it) WameedConnectionService.stop(context)
                     },
-                    colors = SwitchDefaults.colors(checkedThumbColor = Color(0xFF2E7D32))
+                    colors = SwitchDefaults.colors(checkedThumbColor = WameedGreen)
                 )
             }
-        }
+        )
 
-        Spacer(Modifier.height(16.dp))
+        Spacer(Modifier.height(14.dp))
 
-        Surface(Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp),
-            color = Color.White, shadowElevation = 1.dp) {
-            Column(Modifier.padding(18.dp)) {
-                Text(stringResource(R.string.connection_info), fontWeight = FontWeight.Bold, fontSize = 15.sp)
-                Spacer(Modifier.height(10.dp))
-                val address = WameedPrefs.getDisplayAddress(context)
-                if (address.isNotEmpty()) {
-                    Text(stringResource(R.string.pc_label, address), fontSize = 13.sp, color = Color.Gray)
-                } else {
-                    Text(stringResource(R.string.not_connected), fontSize = 13.sp, color = Color.Gray)
-                }
-            }
-        }
+        val address = WameedPrefs.getDisplayAddress(context)
+        WameedSettingsRow(
+            title = stringResource(R.string.connection_info),
+            subtitle = if (address.isNotEmpty()) stringResource(R.string.pc_label, address) else stringResource(R.string.not_connected)
+        )
 
-        Spacer(Modifier.height(16.dp))
+        Spacer(Modifier.height(14.dp))
 
         if (BuildConfig.DEBUG) {
-            // Test Crash button
-            Surface(Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp),
-                color = Color(0xFFFF5252).copy(alpha = 0.1f), shadowElevation = 1.dp) {
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .clickable {
-                            Log.d("FirebaseTest", "About to trigger test crash for Crashlytics")
-                            val testException = RuntimeException("Test Crash - Firebase Crashlytics Testing")
-                            Firebase.crashlytics.recordException(testException)
-                            Firebase.crashlytics.log("Test crash triggered by user")
-                            android.widget.Toast.makeText(context, "تم إرسال اختبار العطل إلى Firebase", android.widget.Toast.LENGTH_SHORT).show()
-                        }
-                        .padding(18.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column(Modifier.weight(1f)) {
-                        Text("اختبار العطل",
-                            fontWeight = FontWeight.Bold, fontSize = 15.sp, color = Color(0xFFFF5252))
-                        Spacer(Modifier.height(4.dp))
-                        Text("اضغط هنا لاختبار Firebase Crashlytics",
-                            fontSize = 12.sp, color = Color(0xFFFF5252).copy(alpha = 0.7f))
-                    }
-                    Icon(Icons.Default.Warning, null, tint = Color(0xFFFF5252))
-                }
-            }
+            WameedSettingsRow(
+                title = "اختبار العطل",
+                subtitle = "اضغط هنا لاختبار Firebase Crashlytics",
+                onClick = {
+                    Log.d("FirebaseTest", "About to trigger test crash for Crashlytics")
+                    val testException = RuntimeException("Test Crash - Firebase Crashlytics Testing")
+                    Firebase.crashlytics.recordException(testException)
+                    Firebase.crashlytics.log("Test crash triggered by user")
+                    android.widget.Toast.makeText(context, "تم إرسال اختبار العطل إلى Firebase", android.widget.Toast.LENGTH_SHORT).show()
+                },
+                action = { WameedBadge(text = "DEBUG", color = WameedError) }
+            )
+            Spacer(Modifier.height(14.dp))
+        }
+
+        WameedSettingsRow(
+            title = stringResource(R.string.bug_report_title),
+            subtitle = "الإبلاغ عن مشاكل في التطبيق",
+            onClick = {
+                val intent = Intent(context, WameedBugReportActivity::class.java)
+                context.startActivity(intent)
+            },
+            action = { WameedBadge(text = stringResource(R.string.open), color = WameedGreen) }
+        )
+
+        Spacer(Modifier.height(14.dp))
+
+        WameedSettingsRow(
+            title = stringResource(R.string.diag_log_title),
+            subtitle = stringResource(R.string.diag_log_detail),
+            onClick = onShowDiagLog,
+            action = { WameedBadge(text = stringResource(R.string.open), color = WameedInfo) }
+        )
+
+        Spacer(Modifier.height(14.dp))
+
+        WameedSettingsRow(
+            title = stringResource(R.string.diag_net_title),
+            subtitle = stringResource(R.string.diag_net_detail),
+            onClick = onShowNetDiag,
+            action = { WameedBadge(text = stringResource(R.string.open), color = WameedGreen) }
+        )
+
+        Spacer(Modifier.height(14.dp))
+
+        WameedCard(modifier = Modifier.fillMaxWidth()) {
+            Text(stringResource(R.string.about_title), fontWeight = FontWeight.Bold, fontSize = 15.sp, color = WameedTextPrimary)
+            Spacer(Modifier.height(6.dp))
+            Text(stringResource(R.string.about_version, BuildConfig.VERSION_NAME), fontSize = 12.sp, color = WameedTextSecondary)
+            Text(stringResource(R.string.about_detail), fontSize = 12.sp, color = WameedTextSecondary)
             Spacer(Modifier.height(16.dp))
-        }
-
-        // Bug Report button
-        Surface(Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp),
-            color = Color.White, shadowElevation = 1.dp) {
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .clickable {
-                        val intent = Intent(context, WameedBugReportActivity::class.java)
-                        context.startActivity(intent)
-                    }
-                    .padding(18.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column(Modifier.weight(1f)) {
-                    Text(stringResource(R.string.bug_report_title),
-                        fontWeight = FontWeight.Bold, fontSize = 15.sp)
-                    Spacer(Modifier.height(4.dp))
-                    Text("الإبلاغ عن مشاكل في التطبيق",
-                        fontSize = 12.sp, color = Color.Gray)
-                }
-                Icon(Icons.Default.BugReport, null, tint = Color(0xFF2E7D32))
-            }
-        }
-
-        Spacer(Modifier.height(16.dp))
-
-        // سجل التشخيص
-        Surface(Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp),
-            color = Color.White, shadowElevation = 1.dp) {
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .clickable { onShowDiagLog() }
-                    .padding(18.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column(Modifier.weight(1f)) {
-                    Text(stringResource(R.string.diag_log_title),
-                        fontWeight = FontWeight.Bold, fontSize = 15.sp)
-                    Spacer(Modifier.height(4.dp))
-                    Text(stringResource(R.string.diag_log_detail),
-                        fontSize = 12.sp, color = Color.Gray)
-                }
-                Icon(Icons.AutoMirrored.Filled.List, null, tint = Color(0xFF3B82F6))
-            }
-        }
-
-        Spacer(Modifier.height(12.dp))
-
-        // تشخيص الشبكة
-        Surface(Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp),
-            color = Color.White, shadowElevation = 1.dp) {
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .clickable { onShowNetDiag() }
-                    .padding(18.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column(Modifier.weight(1f)) {
-                    Text(stringResource(R.string.diag_net_title),
-                        fontWeight = FontWeight.Bold, fontSize = 15.sp)
-                    Spacer(Modifier.height(4.dp))
-                    Text(stringResource(R.string.diag_net_detail),
-                        fontSize = 12.sp, color = Color.Gray)
-                }
-                Icon(Icons.Default.NetworkCheck, null, tint = Color(0xFF2E7D32))
-            }
-        }
-
-        Spacer(Modifier.height(16.dp))
-
-        Surface(Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp),
-            color = Color.White, shadowElevation = 1.dp) {
-            Column(Modifier.padding(18.dp)) {
-                Text(stringResource(R.string.about_title), fontWeight = FontWeight.Bold, fontSize = 15.sp)
-                Spacer(Modifier.height(6.dp))
-                Text(stringResource(R.string.about_version, BuildConfig.VERSION_NAME), fontSize = 12.sp, color = Color.Gray)
-                Text(stringResource(R.string.about_detail), fontSize = 12.sp, color = Color.Gray)
-                
-                Spacer(Modifier.height(16.dp))
-                
-                val updateState by updateManager.updateState.collectAsState()
-                val scope = rememberCoroutineScope()
-                
-                Button(
-                    onClick = {
-                        scope.launch {
-                            updateManager.checkForUpdates(isManual = true)
-                        }
-                    },
-                    modifier = Modifier.fillMaxWidth().height(44.dp),
-                    enabled = updateState !is UpdateState.Checking,
-                    shape = RoundedCornerShape(12.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = if (updateState is UpdateState.UpToDate) Color(0xFF2E7D32) else Color(0xFF43A047),
-                        contentColor = Color.White
-                    ),
-                    elevation = ButtonDefaults.buttonElevation(defaultElevation = 0.dp)
-                ) {
-                    if (updateState is UpdateState.Checking) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(16.dp),
-                            color = Color.White,
-                            strokeWidth = 2.dp
-                        )
-                        Spacer(Modifier.width(10.dp))
-                        Text(stringResource(R.string.checking_updates), fontSize = 13.sp, fontWeight = FontWeight.Medium)
-                    } else {
-                        Icon(
-                            if (updateState is UpdateState.UpToDate) Icons.Default.CheckCircle else Icons.Default.Update, 
-                            null, 
-                            modifier = Modifier.size(18.dp)
-                        )
-                        Spacer(Modifier.width(8.dp))
-                        Text(
-                            text = when(updateState) {
-                                is UpdateState.UpToDate -> stringResource(R.string.app_up_to_date)
-                                is UpdateState.Failed -> "تعذر التحقق، حاول لاحقاً"
-                                else -> stringResource(R.string.check_for_updates)
-                            },
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.Bold
-                        )
-                    }
-                }
-            }
+            WameedPrimaryButton(
+                text = when (updateState) {
+                    is UpdateState.UpToDate -> stringResource(R.string.app_up_to_date)
+                    is UpdateState.Failed -> "تعذر التحقق، حاول لاحقاً"
+                    else -> stringResource(R.string.check_for_updates)
+                },
+                onClick = {
+                    scope.launch { updateManager.checkForUpdates(isManual = true) }
+                },
+                enabled = updateState !is UpdateState.Checking,
+                loading = updateState is UpdateState.Checking
+            )
         }
     }
 }
@@ -1631,43 +1521,38 @@ fun TrustedDevicesTab(modifier: Modifier, onBack: () -> Unit) {
     Column(
         modifier = modifier
             .fillMaxSize()
-            .background(Color(0xFFF8FAFC))
+            .background(WameedMint)
             .padding(horizontal = 20.dp, vertical = 16.dp)
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = onBack) {
-                Icon(Icons.Default.Home, null, tint = Color(0xFF2E7D32))
-            }
-            Text(stringResource(R.string.trusted_devices_title), fontWeight = FontWeight.Bold, fontSize = 18.sp, color = Color(0xFF2E7D32))
+            WameedTextAction(text = stringResource(R.string.close), onClick = onBack, color = WameedTextSecondary)
+            Spacer(Modifier.width(8.dp))
+            Text(stringResource(R.string.trusted_devices_title), fontWeight = FontWeight.Bold, fontSize = 20.sp, color = WameedGreen)
         }
         Spacer(Modifier.height(20.dp))
 
         if (trustedIds.isEmpty()) {
-            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Text(stringResource(R.string.no_trusted_devices), color = Color.Gray)
-            }
+            WameedEmptyState(title = stringResource(R.string.no_trusted_devices))
         } else {
             LazyColumn(
                 modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
+                verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 items(trustedIds) { id ->
-                    Surface(
+                    WameedCard(
                         modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(14.dp),
-                        color = Color.White,
-                        shadowElevation = 1.dp
+                        contentPadding = PaddingValues(14.dp)
                     ) {
-                        Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            PulsingDot(color = WameedGreen, pulsing = false, size = 9.dp)
+                            Spacer(Modifier.width(12.dp))
                             Column(Modifier.weight(1f)) {
-                                Text(id, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+                                Text(id, fontSize = 14.sp, fontWeight = FontWeight.Medium, color = WameedTextPrimary)
                             }
-                            IconButton(onClick = {
+                            WameedTextAction(text = stringResource(R.string.delete), color = WameedError, onClick = {
                                 WameedPrefs.removeTrustedDevice(context, id)
                                 trustedIds = WameedPrefs.getTrustedDevices(context).toList()
-                            }) {
-                                Icon(Icons.Default.Delete, null, tint = Color(0xFFEF4444))
-                            }
+                            })
                         }
                     }
                 }
@@ -1683,30 +1568,18 @@ fun StatusCard(
     device: DeviceDiscovery.DiscoveredDevice?
 ) {
     val dotColor = when (state) {
-        ConnectionState.Connected -> Color(0xFF22C55E)
-        ConnectionState.Discovered -> Color(0xFFFBBF24)
-        ConnectionState.Failed -> Color(0xFFEF4444)
-        ConnectionState.Rejected -> Color(0xFFDC2626)
-        ConnectionState.Connecting -> Color(0xFFFBBF24)
-        ConnectionState.PairingPending -> Color(0xFFF97316)
-        ConnectionState.Checking -> Color(0xFF9CA3AF)
-        ConnectionState.Searching -> Color(0xFF3B82F6)
-        ConnectionState.Idle -> Color(0xFF9CA3AF)
+        ConnectionState.Connected -> WameedSuccess
+        ConnectionState.Discovered -> WameedWarning
+        ConnectionState.Failed -> WameedError
+        ConnectionState.Rejected -> WameedError
+        ConnectionState.Connecting -> WameedWarning
+        ConnectionState.PairingPending -> WameedWarning
+        ConnectionState.Checking -> WameedTextMuted
+        ConnectionState.Searching -> WameedInfo
+        ConnectionState.Idle -> WameedTextMuted
     }
+    val pulsing = state == ConnectionState.Connected || state == ConnectionState.Searching || state == ConnectionState.Connecting
 
-    val bgColor = when (state) {
-        ConnectionState.Connected -> Color(0xFFF0FFF4)
-        ConnectionState.Discovered -> Color(0xFFFFFBEB)
-        ConnectionState.Failed -> Color(0xFFFFF5F5)
-        ConnectionState.Rejected -> Color(0xFFFEF2F2)
-        ConnectionState.Connecting -> Color(0xFFFFFBEB)
-        ConnectionState.PairingPending -> Color(0xFFFFF7ED)
-        ConnectionState.Checking -> Color(0xFFF3F4F6)
-        ConnectionState.Searching -> Color(0xFFEFF6FF)
-        ConnectionState.Idle -> Color.White
-    }
-
-    // نص الحالة الموحّد: "متصل بـ X" أو حالة أخرى
     val displayText = when {
         state == ConnectionState.Connected && device != null -> {
             val name = if (device.name.isNotBlank() && device.name != device.ip && device.name != device.address)
@@ -1715,41 +1588,34 @@ fun StatusCard(
         }
         state == ConnectionState.Discovered && device != null -> {
             val name = if (device.name.isNotBlank() && device.name != device.ip) device.name else device.address
-            stringResource(R.string.connected_to_device, name)
+            stringResource(R.string.discovered_device, name)
         }
         statusText.isNotBlank() -> statusText
         else -> stringResource(R.string.not_connected)
     }
 
-    Surface(
+    WameedCard(
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(20.dp),
-        color = bgColor,
-        shadowElevation = 1.dp
+        selected = state == ConnectionState.Connected,
+        contentPadding = PaddingValues(horizontal = 20.dp, vertical = 18.dp)
     ) {
         Row(
-            modifier = Modifier.padding(20.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Box(
-                modifier = Modifier
-                    .size(12.dp)
-                    .clip(CircleShape)
-                    .background(dotColor)
-            )
-            Spacer(modifier = Modifier.width(14.dp))
+            PulsingDot(color = dotColor, pulsing = pulsing, size = 12.dp)
+            Spacer(Modifier.width(14.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     displayText,
                     fontWeight = FontWeight.Bold,
-                    fontSize = 16.sp,
-                    color = if (state == ConnectionState.Connected) Color(0xFF166534) else Color(0xFF1E293B)
+                    fontSize = 15.sp,
+                    color = WameedTextPrimary
                 )
                 if (device != null && state == ConnectionState.Connected) {
                     Text(
                         device.address,
                         fontSize = 12.sp,
-                        color = Color(0xFF64748B)
+                        color = WameedTextSecondary
                     )
                 }
             }
@@ -1764,12 +1630,7 @@ fun StatusCard(
                 )
             }
             if (state == ConnectionState.Connected) {
-                Icon(
-                    Icons.Default.CheckCircle,
-                    contentDescription = null,
-                    tint = Color(0xFF22C55E),
-                    modifier = Modifier.size(20.dp)
-                )
+                WameedBadge(text = stringResource(R.string.status_connected), color = WameedSuccess)
             }
         }
     }
@@ -1785,97 +1646,69 @@ fun BatchProgressOverlay(
     fileName: String,
     infoStatus: String = ""
 ) {
-    Surface(
+    WameedCard(
         modifier = Modifier
             .fillMaxWidth()
             .padding(16.dp)
-            .padding(bottom = 80.dp), // Height of BottomBar
-        shape = RoundedCornerShape(24.dp), // زوايا أكثر نعومة
-        color = Color.White,
-        shadowElevation = 12.dp // ظل أعمق لبروز البرق
+            .padding(bottom = 80.dp),
+        contentPadding = PaddingValues(20.dp)
     ) {
-        Column(modifier = Modifier.padding(20.dp)) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text(
+                    text = label,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 15.sp,
+                    color = WameedGreen
+                )
+                if (totalFiles > 1) {
                     Text(
-                        text = label,
-                        fontWeight = FontWeight.ExtraBold,
-                        fontSize = 15.sp,
-                        color = Color(0xFF2E7D32)
+                        text = "$currentFile / $totalFiles",
+                        fontSize = 12.sp,
+                        color = WameedTextSecondary,
+                        fontWeight = FontWeight.Medium
                     )
-                    if (totalFiles > 1) {
-                        Text(
-                            text = "$currentFile / $totalFiles",
-                            fontSize = 12.sp,
-                            color = Color.Gray,
-                            fontWeight = FontWeight.Medium
-                        )
-                    }
-                    if (infoStatus.isNotEmpty()) {
-                        Text(
-                            text = infoStatus,
-                            fontSize = 12.sp,
-                            color = Color(0xFFF97316), // لون برتقالي للتنبيهات اللحظية
-                            fontWeight = FontWeight.Bold
-                        )
-                    }
                 }
-                
-                if (speed > 0 && infoStatus.isEmpty()) {
-                    Surface(
-                        color = Color(0xFFE8F5E9),
-                        shape = RoundedCornerShape(8.dp)
-                    ) {
-                        Text(
-                            text = "%.1f Mbps".format(speed),
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-                            fontSize = 12.sp,
-                            color = Color(0xFF2E7D32),
-                            fontWeight = FontWeight.Bold
-                        )
-                    }
+                if (infoStatus.isNotEmpty()) {
+                    Text(
+                        text = infoStatus,
+                        fontSize = 12.sp,
+                        color = WameedWarning,
+                        fontWeight = FontWeight.Bold
+                    )
                 }
             }
-            
-            Spacer(modifier = Modifier.height(12.dp))
-            
-            Text(
-                text = fileName,
-                fontSize = 13.sp,
-                maxLines = 1,
-                fontWeight = FontWeight.Medium,
-                color = Color.Gray
-            )
-            
-            Spacer(modifier = Modifier.height(16.dp))
-            
-            Box(contentAlignment = Alignment.CenterEnd) {
-                LinearProgressIndicator(
-                    progress = { progress / 100f },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(10.dp)
-                        .clip(RoundedCornerShape(5.dp)),
-                    color = Color(0xFF43A047),
-                    trackColor = Color(0xFFE8F5E9),
-                    strokeCap = StrokeCap.Round
-                )
-            }
-            
-            if (progress >= 100) {
-                 Text(
-                    text = "✓ تم الإرسال",
-                    modifier = Modifier.align(Alignment.End).padding(top = 4.dp),
-                    fontSize = 11.sp,
-                    color = Color(0xFF43A047),
-                    fontWeight = FontWeight.Bold
-                )
+
+            if (speed > 0 && infoStatus.isEmpty()) {
+                WameedBadge(text = "%.1f Mbps".format(speed), color = WameedGreen)
             }
         }
+
+        Spacer(Modifier.height(12.dp))
+
+        Text(
+            text = fileName,
+            fontSize = 13.sp,
+            maxLines = 1,
+            fontWeight = FontWeight.Medium,
+            color = WameedTextSecondary
+        )
+
+        Spacer(Modifier.height(14.dp))
+        WameedProgressBar(progress = progress / 100f)
+        Spacer(Modifier.height(8.dp))
+
+        Text(
+            text = if (progress >= 100) stringResource(R.string.send_complete) else "$progress%",
+            modifier = Modifier.align(Alignment.End),
+            fontSize = 12.sp,
+            color = if (progress >= 100) WameedSuccess else WameedTextSecondary,
+            fontWeight = FontWeight.Bold
+        )
     }
 }
 
@@ -1888,58 +1721,39 @@ fun DeviceItem(
     onClick: () -> Unit
 ) {
     val dotColor = when {
-        isConnected -> Color(0xFF22C55E)   // أخضر — متصل
-        isConnecting -> Color(0xFFFBBF24)  // أصفر — جاري الاتصال
-        isSelected -> Color(0xFFFBBF24)    // أصفر — مكتشف/محدد
-        else -> Color(0xFF9CA3AF)          // رمادي — مكتشف فقط
+        isConnected -> WameedSuccess
+        isConnecting -> WameedWarning
+        isSelected -> WameedGreen
+        else -> WameedTextMuted
     }
 
-    Surface(
+    WameedCard(
         modifier = Modifier
             .fillMaxWidth()
             .clickable(enabled = !isConnecting) { onClick() },
-        shape = RoundedCornerShape(16.dp),
-        color = if (isSelected) Color(0xFFE8F5E9) else Color.White,
-        shadowElevation = 1.dp
+        selected = isSelected,
+        contentPadding = PaddingValues(horizontal = 18.dp, vertical = 15.dp)
     ) {
-        Row(
-            modifier = Modifier.padding(16.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Box(contentAlignment = Alignment.Center) {
-                Box(
-                    modifier = Modifier
-                        .size(40.dp)
-                        .clip(CircleShape)
-                        .background(Color(0xFF43A047).copy(alpha = 0.1f)),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        device.name.first().uppercase(),
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 16.sp,
-                        color = Color(0xFF43A047)
-                    )
-                }
-                Box(
-                    modifier = Modifier
-                        .size(12.dp)
-                        .clip(CircleShape)
-                        .background(dotColor)
-                        .align(Alignment.BottomEnd)
-                )
-            }
-            Spacer(modifier = Modifier.width(12.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            PulsingDot(color = dotColor, pulsing = isConnected || isConnecting, size = 10.dp)
+            Spacer(Modifier.width(14.dp))
             Column(modifier = Modifier.weight(1f)) {
-                Text(device.name, fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
-                Text(device.address, fontSize = 12.sp, color = Color.Gray)
+                Text(
+                    device.name.ifBlank { device.address },
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = 15.sp,
+                    color = WameedTextPrimary
+                )
+                Text(device.address, fontSize = 12.sp, color = WameedTextSecondary)
             }
             if (isConnecting) {
                 CircularProgressIndicator(
                     modifier = Modifier.size(20.dp),
                     strokeWidth = 2.dp,
-                    color = Color(0xFF43A047)
+                    color = WameedWarning
                 )
+            } else if (isConnected) {
+                WameedBadge(text = stringResource(R.string.status_connected), color = WameedSuccess)
             }
         }
     }

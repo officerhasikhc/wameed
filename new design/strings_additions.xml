@@ -1,0 +1,45 @@
+content:
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+============================================================================
+  WAMEED — Strings الجديدة المطلوبة للواجهة المحدّثة
+  ضع هذه القيم داخل res/values-ar/strings.xml و res/values/strings.xml
+============================================================================
+-->
+<resources>
+
+    <!-- Tab labels (نصية بدون أيقونات) -->
+    <string name="tab_home">الرئيسية</string>
+    <string name="tab_history">السجل</string>
+    <string name="tab_received">الملفات</string>
+    <string name="tab_settings">الإعدادات</string>
+
+    <!-- Actions -->
+    <string name="action_send_file">إرسال ملف</string>
+    <string name="action_refresh">تحديث</string>
+    <string name="action_manual_connect">اتصال يدوي بـ IP</string>
+    <string name="action_open">فتح</string>
+    <string name="action_cancel">إلغاء</string>
+    <string name="action_share">مشاركة</string>
+
+    <!-- Sections -->
+    <string name="section_devices">الأجهزة المتاحة</string>
+    <string name="section_recent_files">آخر الملفات</string>
+
+    <!-- Status messages -->
+    <string name="connected_to_device">متصل بـ %1$s</string>
+    <string name="discovered_device">تم العثور على %1$s</string>
+    <string name="not_connected">غير متصل</string>
+    <string name="searching_devices">جاري البحث عن الأجهزة…</string>
+    <string name="no_devices_found">لا توجد أجهزة قريبة</string>
+    <string name="no_devices_hint">تأكد أن جهازك والكمبيوتر على نفس الشبكة</string>
+
+    <!-- Device status badges -->
+    <string name="status_connected">متصل</string>
+    <string name="status_connecting">يتصل…</string>
+
+    <!-- Progress -->
+    <string name="sending_progress">جاري الإرسال</string>
+    <string name="send_complete">تم الإرسال ✓</string>
+
+</resources>

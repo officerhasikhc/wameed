@@ -3,6 +3,7 @@ package com.wameed
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Intent
+import android.content.res.ColorStateList
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
@@ -130,49 +131,50 @@ class ReceiveActivity : AppCompatActivity() {
     private fun buildUI() {
         val cardBackground = GradientDrawable().apply {
             shape = GradientDrawable.RECTANGLE
-            cornerRadius = 32f
+            cornerRadius = 44f
             setColor(Color.WHITE)
         }
 
         val layout = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(64, 56, 64, 48)
+            setPadding(56, 48, 56, 44)
             gravity = Gravity.CENTER_HORIZONTAL
             background = cardBackground
-            elevation = 16f
+            elevation = 18f
         }
 
         val headerStrip = View(this).apply {
             setBackgroundColor("#2E7D32".toColorInt())
             layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, 6
-            ).apply { bottomMargin = 32 }
+                LinearLayout.LayoutParams.MATCH_PARENT, 5
+            ).apply { bottomMargin = 26 }
         }
         layout.addView(headerStrip)
 
         iconView = TextView(this).apply {
-            text = "📲"
-            textSize = 44f
+            text = "●"
+            textSize = 24f
             gravity = Gravity.CENTER
+            setTextColor("#2E7D32".toColorInt())
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
-            ).apply { bottomMargin = 16 }
+            ).apply { bottomMargin = 12 }
         }
 
         statusText = TextView(this).apply {
             text = getString(R.string.request_received)
-            textSize = 18f
+            textSize = 17f
             setTypeface(null, Typeface.BOLD)
             gravity = Gravity.CENTER
-            setTextColor("#1B5E20".toColorInt())
+            setTextColor("#1E293B".toColorInt())
         }
 
         detailText = TextView(this).apply {
             text = ""
             textSize = 13f
             gravity = Gravity.CENTER
-            setTextColor("#757575".toColorInt())
+            setTextColor("#64748B".toColorInt())
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
@@ -190,13 +192,15 @@ class ReceiveActivity : AppCompatActivity() {
         progressBar = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
-                20
+                18
             ).apply {
-                topMargin = 28
+                topMargin = 26
                 bottomMargin = 12
             }
             max = 100
             progress = 0
+            progressTintList = ColorStateList.valueOf("#2E7D32".toColorInt())
+            progressBackgroundTintList = ColorStateList.valueOf("#E8F5E9".toColorInt())
             visibility = View.GONE
         }
 
@@ -204,7 +208,7 @@ class ReceiveActivity : AppCompatActivity() {
             text = ""
             textSize = 11f
             gravity = Gravity.CENTER
-            setTextColor("#9E9E9E".toColorInt())
+            setTextColor("#94A3B8".toColorInt())
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
@@ -218,7 +222,7 @@ class ReceiveActivity : AppCompatActivity() {
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
-            ).apply { topMargin = 28 }
+            ).apply { topMargin = 24 }
         }
 
         layout.addView(iconView)
@@ -249,8 +253,50 @@ class ReceiveActivity : AppCompatActivity() {
         window.attributes = attrs
     }
 
+    private fun styleButton(button: Button, kind: ButtonKind = ButtonKind.Primary) {
+        val (bg, fg, stroke) = when (kind) {
+            ButtonKind.Primary -> Triple("#2E7D32", "#FFFFFF", "#2E7D32")
+            ButtonKind.Secondary -> Triple("#FFFFFF", "#2E7D32", "#2E7D32")
+            ButtonKind.Danger -> Triple("#FFFFFF", "#EF4444", "#EF4444")
+        }
+        button.apply {
+            isAllCaps = false
+            textSize = 14f
+            setTypeface(null, Typeface.BOLD)
+            setTextColor(fg.toColorInt())
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.RECTANGLE
+                cornerRadius = 44f
+                setColor(bg.toColorInt())
+                setStroke(2, stroke.toColorInt())
+            }
+            setPadding(28, 12, 28, 12)
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+                marginStart = 6
+                marginEnd = 6
+            }
+        }
+    }
+
+    private fun styleContentPanel(view: TextView, background: String = "#F8FAFC", textColor: String = "#1E293B") {
+        view.setTextColor(textColor.toColorInt())
+        view.background = GradientDrawable().apply {
+            shape = GradientDrawable.RECTANGLE
+            cornerRadius = 24f
+            setColor(background.toColorInt())
+            setStroke(1, "#E2E8F0".toColorInt())
+        }
+    }
+
+    private fun setStatusDot(color: String) {
+        iconView.text = "●"
+        iconView.setTextColor(color.toColorInt())
+    }
+
+    private enum class ButtonKind { Primary, Secondary, Danger }
+
     private fun showPairingUI() {
-        iconView.text = "🤝"
+        setStatusDot("#F59E0B")
         statusText.text = getString(R.string.pairing_request, deviceName)
         detailText.text = getString(R.string.pairing_request_detail)
         contentContainer.removeAllViews()
@@ -258,6 +304,7 @@ class ReceiveActivity : AppCompatActivity() {
         
         val rejectBtn = Button(this).apply {
             text = getString(R.string.reject)
+            styleButton(this, ButtonKind.Danger)
             setOnClickListener {
                 val intent = Intent(this@ReceiveActivity, WameedConnectionService::class.java).apply {
                     action = WameedConnectionService.ACTION_REJECT_PAIRING
@@ -269,6 +316,7 @@ class ReceiveActivity : AppCompatActivity() {
 
         val acceptBtn = Button(this).apply {
             text = getString(R.string.accept)
+            styleButton(this, ButtonKind.Primary)
             setOnClickListener {
                 if (deviceId.isNotEmpty()) {
                     WameedPrefs.addTrustedDevice(this@ReceiveActivity, deviceId)
@@ -279,9 +327,9 @@ class ReceiveActivity : AppCompatActivity() {
                 startService(intent)
                 
                 // Simplified "Connected" state
-                iconView.text = "✅"
+                setStatusDot("#22C55E")
                 statusText.text = getString(R.string.status_connected_to).replace("{name}", deviceName)
-                statusText.setTextColor("#2E7D32".toColorInt())
+                statusText.setTextColor("#1E293B".toColorInt())
                 detailText.text = ""
                 buttonsLayout.removeAllViews()
                 
@@ -297,9 +345,9 @@ class ReceiveActivity : AppCompatActivity() {
     }
 
     private fun showCompletedUI(uri: String?) {
-        iconView.text = ""
+        setStatusDot("#22C55E")
         statusText.text = getString(R.string.receive_success)
-        statusText.setTextColor("#1B5E20".toColorInt())
+        statusText.setTextColor("#1E293B".toColorInt())
         detailText.text = filename
         progressBar.visibility = View.GONE
         contentContainer.removeAllViews()
@@ -309,6 +357,7 @@ class ReceiveActivity : AppCompatActivity() {
         if (uri != null) {
             val openBtn = Button(this).apply {
                 text = getString(R.string.open_file_btn)
+                styleButton(this, ButtonKind.Primary)
                 setOnClickListener {
                     autoCloseRunnable?.let { handler.removeCallbacks(it) }
                     countdownTextView?.visibility = View.GONE
@@ -330,6 +379,7 @@ class ReceiveActivity : AppCompatActivity() {
 
         val closeBtn = Button(this).apply {
             text = getString(R.string.close)
+            styleButton(this, ButtonKind.Secondary)
             setOnClickListener {
                 autoCloseRunnable?.let { handler.removeCallbacks(it) }
                 finish()
@@ -342,7 +392,7 @@ class ReceiveActivity : AppCompatActivity() {
     }
 
     private fun showTransferUI() {
-        iconView.text = "📥"
+        setStatusDot("#3B82F6")
         statusText.text = getString(R.string.receiving_file, filename)
         detailText.text = formatSize(fileSize)
         contentContainer.removeAllViews()
@@ -351,6 +401,7 @@ class ReceiveActivity : AppCompatActivity() {
         
         val cancelBtn = Button(this).apply {
             text = getString(R.string.cancel)
+            styleButton(this, ButtonKind.Danger)
             setOnClickListener {
                 val intent = Intent(this@ReceiveActivity, WameedConnectionService::class.java).apply {
                     action = WameedConnectionService.ACTION_STOP_RECEIVING
@@ -364,9 +415,9 @@ class ReceiveActivity : AppCompatActivity() {
 
     private fun showTextReceivedUI() {
         runOnUiThread {
-            iconView.text = "📝"
+            setStatusDot("#22C55E")
             statusText.text = getString(R.string.text_received_from, deviceName)
-            statusText.setTextColor("#1B5E20".toColorInt())
+            statusText.setTextColor("#1E293B".toColorInt())
             detailText.text = ""
             vibrateSuccess()
             progressBar.visibility = View.GONE
@@ -377,7 +428,7 @@ class ReceiveActivity : AppCompatActivity() {
                 text = receivedText
                 textSize = 15f
                 setPadding(24, 24, 24, 24)
-                setBackgroundColor("#F3F4F6".toColorInt())
+                styleContentPanel(this)
                 maxLines = 10
                 movementMethod = ScrollingMovementMethod()
                 layoutParams = LinearLayout.LayoutParams(
@@ -389,6 +440,7 @@ class ReceiveActivity : AppCompatActivity() {
 
             val copyBtn = Button(this).apply {
                 text = getString(R.string.copy)
+                styleButton(this, ButtonKind.Primary)
                 setOnClickListener {
                     val clipboard = getSystemService(CLIPBOARD_SERVICE) as ClipboardManager
                     clipboard.setPrimaryClip(ClipData.newPlainText(getString(R.string.app_name), receivedText))
@@ -397,6 +449,7 @@ class ReceiveActivity : AppCompatActivity() {
             }
             val closeBtn = Button(this).apply {
                 text = getString(R.string.close)
+                styleButton(this, ButtonKind.Secondary)
                 setOnClickListener {
                     autoCloseRunnable?.let { handler.removeCallbacks(it) }
                     finish()
@@ -414,9 +467,9 @@ class ReceiveActivity : AppCompatActivity() {
 
     private fun showUrlReceivedUI() {
         runOnUiThread {
-            iconView.text = "🔗"
+            setStatusDot("#3B82F6")
             statusText.text = getString(R.string.url_received_from, deviceName)
-            statusText.setTextColor("#1565C0".toColorInt())
+            statusText.setTextColor("#1E293B".toColorInt())
             detailText.text = ""
             vibrateSuccess()
             progressBar.visibility = View.GONE
@@ -427,8 +480,7 @@ class ReceiveActivity : AppCompatActivity() {
                 text = receivedUrl
                 textSize = 14f
                 setPadding(24, 24, 24, 24)
-                setBackgroundColor("#EFF6FF".toColorInt())
-                setTextColor("#1D4ED8".toColorInt())
+                styleContentPanel(this, background = "#EFF6FF", textColor = "#1D4ED8")
                 layoutParams = LinearLayout.LayoutParams(
                     LinearLayout.LayoutParams.MATCH_PARENT,
                     LinearLayout.LayoutParams.WRAP_CONTENT
@@ -438,6 +490,7 @@ class ReceiveActivity : AppCompatActivity() {
 
             val openBtn = Button(this).apply {
                 text = getString(R.string.open)
+                styleButton(this, ButtonKind.Primary)
                 setOnClickListener {
                     try {
                         startActivity(Intent(Intent.ACTION_VIEW, receivedUrl.toUri()))
@@ -448,6 +501,7 @@ class ReceiveActivity : AppCompatActivity() {
             }
             val copyBtn = Button(this).apply {
                 text = getString(R.string.copy)
+                styleButton(this, ButtonKind.Secondary)
                 setOnClickListener {
                     val clipboard = getSystemService(CLIPBOARD_SERVICE) as ClipboardManager
                     clipboard.setPrimaryClip(ClipData.newPlainText(getString(R.string.app_name), receivedUrl))
@@ -456,6 +510,7 @@ class ReceiveActivity : AppCompatActivity() {
             }
             val closeBtn = Button(this).apply {
                 text = getString(R.string.close)
+                styleButton(this, ButtonKind.Secondary)
                 setOnClickListener {
                     autoCloseRunnable?.let { handler.removeCallbacks(it) }
                     finish()
@@ -481,10 +536,10 @@ class ReceiveActivity : AppCompatActivity() {
             
             if (percent >= 100) {
                 // If already in success state, don't rebuild UI
-                if (iconView.text == "") return@runOnUiThread
+                if (progressBar.visibility == View.GONE && statusText.text == getString(R.string.receive_success)) return@runOnUiThread
 
-                iconView.text = ""
-                statusText.setTextColor(Color.parseColor("#1B5E20"))
+                setStatusDot("#22C55E")
+                statusText.setTextColor("#1E293B".toColorInt())
                 progressBar.visibility = View.GONE
                 buttonsLayout.removeAllViews()
                 vibrateSuccess()
@@ -492,6 +547,7 @@ class ReceiveActivity : AppCompatActivity() {
                 if (uri != null) {
                     val openBtn = Button(this).apply {
                         text = getString(R.string.open_file_btn)
+                        styleButton(this, ButtonKind.Primary)
                         setOnClickListener {
                             autoCloseRunnable?.let { handler.removeCallbacks(it) }
                             countdownTextView?.visibility = View.GONE
@@ -513,6 +569,7 @@ class ReceiveActivity : AppCompatActivity() {
 
                 val closeBtn = Button(this).apply {
                     text = getString(R.string.close)
+                    styleButton(this, ButtonKind.Secondary)
                     setOnClickListener {
                         autoCloseRunnable?.let { handler.removeCallbacks(it) }
                         finish()
@@ -555,7 +612,7 @@ class ReceiveActivity : AppCompatActivity() {
 
     fun showError(error: String) {
         runOnUiThread {
-            iconView.text = "❌"
+            setStatusDot("#EF4444")
             statusText.text = getString(R.string.error_occurred)
             detailText.text = error
             progressBar.progress = 0
@@ -563,6 +620,7 @@ class ReceiveActivity : AppCompatActivity() {
             if (buttonsLayout.isEmpty()) {
                 val closeBtn = Button(this).apply {
                     text = getString(R.string.close)
+                    styleButton(this, ButtonKind.Secondary)
                     setOnClickListener {
                         autoCloseRunnable?.let { handler.removeCallbacks(it) }
                         finish()
