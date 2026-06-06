@@ -73,7 +73,7 @@ Copy-Item "$root\app\build\outputs\apk\release\app-release.apk" "$root\release\W
 Copy-Item "$root\INSTALL-للصديق.txt" "$root\release\" -ErrorAction SilentlyContinue
 Write-Host "      ✓ تم نسخ المثبّت + APK + التعليمات" -ForegroundColor Green
 
-& "$root\scripts\verify-version.ps1"
+& "$root\scripts\verify-version.ps1" -RequireArtifacts
 
 # ─── ملخص ─────────────────────────────────────────────────────────
 Write-Host ""

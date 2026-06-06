@@ -66,6 +66,7 @@ VERSION = VERSION_NAME
 APP_NAME = "وميض (Wameed)"
 PORT_WS = 7788
 PORT_UDP = 7789
+INSTANCE_CONTROL_PORT = 17788
 
 
 class T:
@@ -133,7 +134,7 @@ translations = {
         "status_connected_to": "✅ متصل بـ {name}",
         "status_receive_ready": "جاهز لاستقبال ملفات الهاتف على هذا الكمبيوتر",
         "status_send_ready": "✅ متصل لإرسال الملفات إلى {name}",
-        "status_discovered_only": "🔵 تم اكتشاف {name} فقط — لم يتم تأكيد WebSocket بعد",
+        "status_discovered_only": "🔵 تم اكتشاف {name} فقط — الاتصال المباشر غير جاهز بعد",
         "status_starting": "جاري التشغيل...",
         "status_searching": "🔍 جاري البحث...",
         "tab_home": "الرئيسية",
@@ -205,7 +206,7 @@ translations = {
         "close": "✕ إغلاق",
         "no_device_connected_error": "لا يوجد جهاز متصل!\n\nاستخدم 'بحث عن أجهزة' أو 'اتصال يدوي' من الصفحة الرئيسية أولاً.",
         "auto_open_file_label": "فتح الملفات تلقائياً عند الاستلام",
-        "auto_open_folder_label": "فتح مجلد الحفظ عند الاستلام",
+        "auto_open_folder_label": "فتح المجلد وتحديد الملف عند الاستلام",
         "warning": "تنبيه",
         "lang_label": "اللغة / Language",
         "status_discovered": "🔵 مكتشف: {name} (غير متصل بعد)",
@@ -225,7 +226,7 @@ translations = {
         "firewall_fix": "🛡️ إصلاح Firewall",
         "firewall_confirm": "سيطلب ويندوز صلاحية المدير لفتح TCP 7788 و UDP 7789 لوميض. هل تريد المتابعة؟",
         "firewall_copied": "تم نسخ أوامر Firewall",
-        "preflight_failed": "الجهاز مكتشف لكن WebSocket غير جاهز. افتح وميض على الهاتف ووافق على الاقتران.",
+        "preflight_failed": "الجهاز ظاهر، لكن الاتصال المباشر غير جاهز. افتح وميض على الهاتف ووافق على الاقتران.",
         "updates_title": "التحديثات",
         "updates_current": "الإصدار الحالي: {version}",
         "check_updates": "البحث عن تحديثات",
@@ -257,7 +258,7 @@ translations = {
         "status_connected_to": "✅ Connected to {name}",
         "status_receive_ready": "Ready to receive phone files on this PC",
         "status_send_ready": "✅ Ready to send files to {name}",
-        "status_discovered_only": "🔵 {name} discovered only — WebSocket not confirmed yet",
+        "status_discovered_only": "🔵 {name} discovered only — direct connection is not ready yet",
         "status_starting": "Starting...",
         "status_searching": "🔍 Searching...",
         "tab_home": "Home",
@@ -329,7 +330,7 @@ translations = {
         "close": "✕ Close",
         "no_device_connected_error": "No device connected!\n\nUse 'Search Devices' or 'Manual Connect' from the home page first.",
         "auto_open_file_label": "Auto-open files on receipt",
-        "auto_open_folder_label": "Open save folder on receipt",
+        "auto_open_folder_label": "Open folder and select received file",
         "warning": "Warning",
         "lang_label": "Language / اللغة",
         "status_discovered": "🔵 Discovered: {name} (not connected yet)",
@@ -349,7 +350,7 @@ translations = {
         "firewall_fix": "🛡️ Fix Firewall",
         "firewall_confirm": "Windows will request administrator permission to open TCP 7788 and UDP 7789 for Wameed. Continue?",
         "firewall_copied": "Firewall commands copied",
-        "preflight_failed": "The device is discovered but WebSocket is not ready. Open Wameed on the phone and approve pairing.",
+        "preflight_failed": "The device is visible, but the direct connection is not ready. Open Wameed on the phone and approve pairing.",
         "updates_title": "Updates",
         "updates_current": "Current version: {version}",
         "check_updates": "Check for updates",
@@ -690,6 +691,9 @@ active_connections = {}  # عدد اتصالات WebSocket النشطة لكل I
 # حالة الاتصال الموحدة: disconnected, discovered, connecting, connected, unstable
 connection_state = "disconnected"
 _health_check_failures = 0  # عدد فشل فحص TCP المتتالي
+_folder_reveal_lock = threading.Lock()
+_folder_reveal_timers = {}
+_FOLDER_REVEAL_DELAY_SECONDS = 0.35
 
 def load_config():
     if os.path.exists(CONFIG_FILE):
@@ -712,6 +716,99 @@ def save_config():
 
 load_config()
 os.makedirs(state["save_dir"], exist_ok=True)
+
+
+def _received_file_open_actions(display_mode):
+    mode = str(display_mode or "").strip().lower()
+    valid_modes = {"open", "path", "both", "none"}
+    if mode in valid_modes:
+        open_file = mode in {"open", "both"} or bool(state.get("auto_open"))
+        open_folder = mode in {"path", "both"} or bool(state.get("auto_open_folder"))
+        return open_file, open_folder
+    return bool(state.get("auto_open")), bool(state.get("auto_open_folder"))
+
+
+def _open_file_best_effort(filepath):
+    try:
+        if not os.path.isfile(filepath):
+            logger.warning(f"Auto-open skipped; file no longer exists: {filepath}")
+            return False
+        os.startfile(filepath)
+        logger.info(f"Auto-open file requested: {os.path.basename(filepath)}")
+        return True
+    except Exception as exc:
+        logger.warning(f"Auto-open file failed for {os.path.basename(filepath)}: {exc}")
+        report_windows_issue(
+            "auto_open_file_failed",
+            exc,
+            level="warning",
+            operation="receive",
+            phase="post_receive_open",
+            file_ext=os.path.splitext(filepath)[1].lower()[:20],
+        )
+        return False
+
+
+def _reveal_file_in_folder(filepath):
+    folder = os.path.dirname(filepath)
+    try:
+        flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        if os.path.isfile(filepath):
+            subprocess.Popen(
+                ["explorer.exe", f"/select,{filepath}"],
+                close_fds=True,
+                creationflags=flags,
+            )
+        elif os.path.isdir(folder):
+            os.startfile(folder)
+        else:
+            logger.warning(f"Auto-open folder skipped; folder no longer exists: {folder}")
+            return False
+        logger.info(f"Auto-open folder requested for: {os.path.basename(filepath)}")
+        return True
+    except Exception as exc:
+        logger.warning(f"Auto-open folder failed for {os.path.basename(filepath)}: {exc}")
+        report_windows_issue(
+            "auto_open_folder_failed",
+            exc,
+            level="warning",
+            operation="receive",
+            phase="post_receive_open",
+            file_ext=os.path.splitext(filepath)[1].lower()[:20],
+        )
+        return False
+
+
+def _schedule_folder_reveal(filepath):
+    folder = os.path.dirname(filepath)
+
+    def reveal_latest():
+        with _folder_reveal_lock:
+            _folder_reveal_timers.pop(folder, None)
+        _reveal_file_in_folder(filepath)
+
+    with _folder_reveal_lock:
+        old_timer = _folder_reveal_timers.get(folder)
+        if old_timer:
+            old_timer.cancel()
+        timer = threading.Timer(_FOLDER_REVEAL_DELAY_SECONDS, reveal_latest)
+        timer.daemon = True
+        _folder_reveal_timers[folder] = timer
+        timer.start()
+
+
+def open_received_file_targets(filepath, display_mode):
+    open_file, open_folder = _received_file_open_actions(display_mode)
+    if not open_file and not open_folder:
+        return
+
+    def worker():
+        if open_file:
+            _open_file_best_effort(filepath)
+        if open_folder:
+            _schedule_folder_reveal(filepath)
+
+    threading.Thread(target=worker, name="WameedPostReceiveOpen", daemon=True).start()
 
 # ======================== GUI Logic ========================
 class WameedApp:
@@ -1322,7 +1419,7 @@ class WameedApp:
                                 logger.warning(f"⚠️ {name} ({ip}) discovered but WebSocket is not ready: {reason}")
                                 self._set_connection_state("discovered", device_info)
                                 status_label.config(
-                                    text=f"{t('preflight_failed')} ({reason})",
+                                    text=t("preflight_failed"),
                                     fg=T.ERROR
                                 )
 
@@ -1670,7 +1767,8 @@ class WameedApp:
             else:
                 device_info = {"id": device_id, "name": device_name, "ip": ip}
                 self._set_connection_state("discovered", device_info)
-                messagebox.showwarning("تنبيه", f"{t('preflight_failed')}\n{reason}")
+                logger.warning(f"Quick connect preflight failed for {device_name} ({ip}): {reason}")
+                messagebox.showwarning("تنبيه", t("preflight_failed"))
         else:
             messagebox.showwarning("تنبيه", f"لم يتم العثور على الجهاز '{device_name}' في الشبكة\nتأكد من أن التطبيق مفتوح على الهاتف")
 
@@ -1935,9 +2033,11 @@ class WameedApp:
 
     def _send_test_report(self):
         report_id = _new_report_id()
+        test_error = RuntimeError(f"Wameed Windows Sentry test report {report_id}")
         event_id = report_windows_issue(
             "report_test",
-            level="info",
+            test_error,
+            level="error",
             flush=True,
             report_id=report_id,
             operation="diagnostics",
@@ -2798,8 +2898,9 @@ if ($LaunchExe) {{
             send_btn.config(state="disabled", text=t("sending_progress"),
                           bg=T.GREEN_LIGHT, cursor="watch")
 
-            if not self._verify_device_connection(ip, timeout=2.0):
-                logger.warning(f"⚠️ Preflight failed before sending to {ip}: TCP 7789 is not reachable")
+            ok, reason = self._verify_phone_websocket(ip, timeout=20)
+            if not ok:
+                logger.warning(f"⚠️ Preflight failed before sending to {ip}: {reason}")
                 report_windows_issue(
                     "send_preflight_failed",
                     level="warning",
@@ -2807,6 +2908,7 @@ if ($LaunchExe) {{
                     phase="preflight",
                     target_ip=ip,
                     target_port=7789,
+                    reason=reason,
                 )
                 device_info = {
                     "id": connected_device.get("id", "") if connected_device else "",
@@ -3383,7 +3485,15 @@ if ($LaunchExe) {{
             menu  = menu,
         )
 
-        threading.Thread(target=self.tray_icon.run, daemon=True, name="WameedTray").start()
+        def _run_tray(icon):
+            try:
+                icon.run()
+            except Exception as exc:
+                logger.error(f"Tray icon stopped unexpectedly: {exc}")
+                if getattr(self, "tray_icon", None) is icon:
+                    self.tray_icon = None
+
+        threading.Thread(target=_run_tray, args=(self.tray_icon,), daemon=True, name="WameedTray").start()
 
         # تحديث tooltip كل 15 ثانية
         def _tick():
@@ -3395,7 +3505,27 @@ if ($LaunchExe) {{
             if state["running"]:
                 self.root.after(15_000, _tick)
         self.root.after(5_000, _tick)
+        self.root.after(20_000, self._ensure_tray_alive)
         logger.info("✅ Tray Icon بدأ")
+
+    def _ensure_tray_alive(self):
+        if not state.get("running"):
+            return
+        icon = getattr(self, "tray_icon", None)
+        if icon is None:
+            logger.warning("Tray icon is missing; recreating it")
+            try:
+                self.setup_tray()
+            except Exception as exc:
+                logger.error(f"Tray icon recreation failed: {exc}")
+        else:
+            try:
+                if hasattr(icon, "visible") and not icon.visible:
+                    icon.visible = True
+            except Exception as exc:
+                logger.debug(f"Tray visibility refresh failed: {exc}")
+        if state.get("running"):
+            self.root.after(20_000, self._ensure_tray_alive)
 
     def browse_folder(self):
         path = filedialog.askdirectory(initialdir=state["save_dir"])
@@ -3473,11 +3603,25 @@ if ($LaunchExe) {{
         self.root.after(0, self._build_devices)
 
     def show_window(self):
-        self.root.deiconify()
-        self.root.lift()
-        self.root.focus_force()
+        try:
+            self.root.deiconify()
+            self.root.state("normal")
+            self.root.lift()
+            self.root.attributes("-topmost", True)
+            self.root.after(250, lambda: self.root.attributes("-topmost", False))
+            self.root.focus_force()
+        except Exception as exc:
+            logger.warning(f"Show window failed: {exc}")
 
     def hide_window(self):
+        if getattr(self, "tray_icon", None) is None:
+            try:
+                self.setup_tray()
+            except Exception as exc:
+                logger.warning(f"Tray unavailable while hiding window: {exc}")
+        if getattr(self, "tray_icon", None) is None:
+            self.root.iconify()
+            return
         self.root.withdraw()
         show_notification(APP_NAME, "وميض يعمل في الخلفية ⚡")
 
@@ -3690,7 +3834,7 @@ async def handle_client(websocket, path=None):
                     fsize = int(data.get("size", 0) or 0)
                     transfer_id = str(data.get("transfer_id") or f"phone-{int(time.time() * 1000)}")
                     chunk_size = int(data.get("chunk_size") or TRANSFER_CHUNK_SIZE)
-                    display_mode = data.get("display_mode", "both")
+                    display_mode = data.get("display_mode")
                     save_dir = state["save_dir"]
                     os.makedirs(save_dir, exist_ok=True)
                     filepath = _ensure_unique_path(os.path.join(save_dir, filename))
@@ -3822,14 +3966,8 @@ async def handle_client(websocket, path=None):
                         winsound.MessageBeep(winsound.MB_OK)
                     except Exception: pass
 
-                    # تنفيذ تعليمات العرض حسب إعدادات المستخدم
-                    try:
-                        if state.get("auto_open"):
-                            os.startfile(filepath)
-                        if state.get("auto_open_folder"):
-                            os.startfile(os.path.dirname(filepath))
-                    except Exception as e:
-                        logger.error(f"خطأ أثناء فتح الملف/المجلد: {e}")
+                    # تنفيذ تعليمات العرض بعد الرد للهاتف: الملف أولاً، ثم المجلد/تحديد الملف.
+                    open_received_file_targets(filepath, display_mode)
 
             except Exception as e:
                 logger.exception("حدث خطأ أثناء معالجة رسالة العميل")
@@ -4028,22 +4166,72 @@ _instance_lock_sock = None
 def _acquire_instance_lock() -> bool:
     """
     يمنع تشغيل أكثر من نسخة واحدة من وميض في نفس الوقت.
-    يستخدم socket بدلاً من ملف قفل — أنظف ولا يترك بقايا.
+    يستخدم socket بدلاً من ملف قفل، ويعمل أيضاً كقناة تحكم للنسخة الثانية.
     """
     global _instance_lock_sock
     try:
         _instance_lock_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        _instance_lock_sock.bind(("127.0.0.1", 17788))  # منفذ داخلي فريد لوميض
+        _instance_lock_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        _instance_lock_sock.bind(("127.0.0.1", INSTANCE_CONTROL_PORT))
+        _instance_lock_sock.listen(5)
+        _instance_lock_sock.settimeout(1.0)
         return True
     except OSError:
+        try:
+            if _instance_lock_sock is not None:
+                _instance_lock_sock.close()
+        except Exception:
+            pass
+        _instance_lock_sock = None
         # المنفذ مشغول → نسخة أخرى تعمل بالفعل
         return False
+
+def _send_instance_command(command="show") -> bool:
+    try:
+        with socket.create_connection(("127.0.0.1", INSTANCE_CONTROL_PORT), timeout=1.0) as s:
+            s.sendall(str(command).encode("utf-8", errors="ignore"))
+        return True
+    except Exception as exc:
+        logger.debug(f"Could not send instance command {command}: {exc}")
+        return False
+
+def _start_instance_control_server(app_obj):
+    def _serve():
+        while state.get("running") and _instance_lock_sock is not None:
+            try:
+                conn, _addr = _instance_lock_sock.accept()
+            except socket.timeout:
+                continue
+            except OSError:
+                break
+            except Exception as exc:
+                logger.debug(f"Instance control accept failed: {exc}")
+                continue
+
+            with conn:
+                try:
+                    command = conn.recv(64).decode("utf-8", errors="ignore").strip().lower()
+                except Exception:
+                    command = ""
+            if command in {"show", "open", ""}:
+                logger.info("Instance control: show main window")
+                app_obj.root.after(0, app_obj.show_window)
+            elif command == "quit":
+                logger.info("Instance control: quit app")
+                app_obj.root.after(0, app_obj.quit_app)
+
+    threading.Thread(target=_serve, daemon=True, name="WameedInstanceControl").start()
 
 def _cleanup_on_exit():
     """تنظيف أيقونة الـ tray عند الخروج لأي سبب"""
     try:
         if 'app' in globals() and hasattr(app, 'tray_icon') and app.tray_icon is not None:
             app.tray_icon.stop()
+    except Exception:
+        pass
+    try:
+        if _instance_lock_sock is not None:
+            _instance_lock_sock.close()
     except Exception:
         pass
 
@@ -4053,15 +4241,8 @@ if __name__ == "__main__":
 
     # ── منع التكرار ──
     if not _acquire_instance_lock():
-        # نسخة أخرى تعمل → أظهرها بدلاً من فتح نسخة جديدة
-        print("وميض يعمل بالفعل! لا يمكن تشغيل نسختين.")
-        try:
-            root = tk.Tk()
-            root.withdraw()
-            messagebox.showinfo("وميض", "وميض يعمل بالفعل ⚡\nابحث عن الأيقونة في شريط المهام.")
-            root.destroy()
-        except Exception:
-            pass
+        # نسخة أخرى تعمل → اطلب منها فتح النافذة، ثم اخرج بهدوء.
+        _send_instance_command("show")
         sys.exit(0)
 
     atexit.register(_cleanup_on_exit)
@@ -4075,6 +4256,7 @@ if __name__ == "__main__":
 
     try:
         app = WameedApp()
+        _start_instance_control_server(app)
 
         # تشغيل السيرفرات في الخلفية
         threading.Thread(target=start_ws_thread, daemon=True).start()

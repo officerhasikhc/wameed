@@ -193,7 +193,7 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-enum class ConnectionState { Idle, Checking, Searching, Connecting, PairingPending, Connected, Discovered, Failed, Rejected }
+enum class ConnectionState { Idle, Checking, Searching, Connecting, PairingPending, Connected, Stale, Discovered, Failed, Rejected }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -202,6 +202,8 @@ fun MainScreen(sender: WameedSender, discovery: DeviceDiscovery, updateManager: 
     var selectedTab by remember { mutableIntStateOf(0) }
     var connectionState by remember { mutableStateOf(ConnectionState.Idle) }
     var statusText by remember { mutableStateOf("") }
+    var isSearchingDevices by remember { mutableStateOf(false) }
+    var sendErrorMessage by remember { mutableStateOf("") }
     var receivingReady by remember { mutableStateOf(WameedConnectionService.isReceiverReady) }
     val devices = remember { mutableStateMapOf<String, DeviceDiscovery.DiscoveredDevice>() }
     var selectedDevice by remember { mutableStateOf<DeviceDiscovery.DiscoveredDevice?>(null) }
@@ -245,22 +247,11 @@ fun MainScreen(sender: WameedSender, discovery: DeviceDiscovery, updateManager: 
         }
     }
 
-    fun sendSelectedFiles() {
-        if (connectionState != ConnectionState.Connected) {
-            Toast.makeText(context, context.getString(R.string.send_not_ready_to_pc), Toast.LENGTH_LONG).show()
-            return
-        }
-        if (selectedUris.isEmpty()) {
-            Log.w("MainActivity", "محاولة إرسال فاشلة: لم يتم اختيار ملفات")
-            return
-        }
-        
-        val urisCopy = selectedUris.toList()
+    fun startBatchSend(urisCopy: List<Uri>) {
         Log.i("MainActivity", "بدء عملية إرسال ${urisCopy.size} ملفات مختارة")
         isSendingBatch = true
-        
-        WameedConnectionService.start(context)
-        
+        sendErrorMessage = ""
+
         sender.sendFiles(urisCopy, object : WameedSender.SendCallback {
             override fun onNextFile(index: Int, total: Int, fileName: String) {
                 Log.d("MainActivity", "إرسال ملف $index/$total: $fileName")
@@ -288,6 +279,9 @@ fun MainScreen(sender: WameedSender, discovery: DeviceDiscovery, updateManager: 
                     isSendingBatch = false
                     selectedUris.clear()
                     currentInfoStatus = ""
+                    connectionState = ConnectionState.Connected
+                    statusText = context.getString(R.string.send_ready_to_pc)
+                    WameedPrefs.setLastConnected(context)
                     Toast.makeText(context, context.getString(R.string.success_all_sent, urisCopy.size), Toast.LENGTH_SHORT).show()
                 }
             }
@@ -297,7 +291,9 @@ fun MainScreen(sender: WameedSender, discovery: DeviceDiscovery, updateManager: 
                 mainHandler.post {
                     isSendingBatch = false
                     currentInfoStatus = ""
-                    Toast.makeText(context, context.getString(R.string.error_prefix, error), Toast.LENGTH_LONG).show()
+                    connectionState = ConnectionState.Discovered
+                    statusText = context.getString(R.string.connection_visible_not_ready)
+                    sendErrorMessage = context.getString(R.string.send_preflight_inline_error, error)
                 }
             }
 
@@ -307,6 +303,52 @@ fun MainScreen(sender: WameedSender, discovery: DeviceDiscovery, updateManager: 
                     currentInfoStatus = ""
                 }
             }
+        })
+    }
+
+    fun sendSelectedFiles() {
+        if (selectedUris.isEmpty()) {
+            Log.w("MainActivity", "محاولة إرسال فاشلة: لم يتم اختيار ملفات")
+            return
+        }
+
+        if (connectionState != ConnectionState.Connected) {
+            sendErrorMessage = context.getString(R.string.send_not_ready_inline)
+            statusText = context.getString(R.string.send_not_ready_to_pc)
+            return
+        }
+
+        val urisCopy = selectedUris.toList()
+        connectionState = ConnectionState.Checking
+        statusText = context.getString(R.string.verifying_send_ready)
+        sendErrorMessage = ""
+        WameedConnectionService.start(context)
+
+        sender.verifySendReady(object : WameedSender.SendCallback {
+            override fun onSuccess(message: String) {
+                mainHandler.post {
+                    connectionState = ConnectionState.Connected
+                    statusText = context.getString(R.string.send_ready_to_pc)
+                    startBatchSend(urisCopy)
+                }
+            }
+
+            override fun onError(error: String) {
+                mainHandler.post {
+                    connectionState = ConnectionState.Discovered
+                    statusText = context.getString(R.string.connection_visible_not_ready)
+                    sendErrorMessage = context.getString(R.string.send_preflight_inline_error, error)
+                }
+            }
+
+            override fun onInfo(message: String) {
+                mainHandler.post {
+                    connectionState = ConnectionState.PairingPending
+                    statusText = message
+                }
+            }
+
+            override fun onProgress(percent: Int) {}
         })
     }
 
@@ -371,10 +413,15 @@ fun MainScreen(sender: WameedSender, discovery: DeviceDiscovery, updateManager: 
     }
 
     fun startDiscovery() {
-        connectionState = ConnectionState.Searching
-        statusText = context.getString(R.string.searching_devices)
+        val keepCurrentConnection = connectionState == ConnectionState.Connected
+        isSearchingDevices = true
+        sendErrorMessage = ""
+        if (!keepCurrentConnection) {
+            connectionState = ConnectionState.Searching
+            statusText = context.getString(R.string.searching_devices)
+            selectedDevice = null
+        }
         devices.clear()
-        selectedDevice = null
 
         discovery.startListening(context, callback = object : DeviceDiscovery.DiscoveryCallback {
             override fun onDeviceFound(device: DeviceDiscovery.DiscoveredDevice) {
@@ -413,12 +460,16 @@ fun MainScreen(sender: WameedSender, discovery: DeviceDiscovery, updateManager: 
             }
             override fun onError(error: String) {
                 mainHandler.post {
-                    connectionState = ConnectionState.Failed
-                    statusText = error
+                    isSearchingDevices = false
+                    if (connectionState != ConnectionState.Connected) {
+                        connectionState = ConnectionState.Failed
+                        statusText = error
+                    }
                 }
             }
             override fun onSearchFinished() {
                 mainHandler.post {
+                    isSearchingDevices = false
                     if (connectionState == ConnectionState.Searching) {
                         connectionState = ConnectionState.Idle
                         statusText = if (devices.isEmpty()) context.getString(R.string.no_devices_found)
@@ -455,13 +506,10 @@ fun MainScreen(sender: WameedSender, discovery: DeviceDiscovery, updateManager: 
                     ip = ip, port = port
                 )
                 WameedPrefs.setLastConnected(context)
-                statusText = if (recentSend != null) {
-                    val ago = (System.currentTimeMillis() - recentSend.first) / 1000
-                    context.getString(R.string.connected_last_send, ago)
-                } else context.getString(R.string.send_ready_to_pc)
+                statusText = context.getString(R.string.send_ready_to_pc)
             }
             recentSend != null -> {
-                connectionState = ConnectionState.Connected
+                connectionState = ConnectionState.Stale
                 if (selectedDevice == null) {
                     val friendly = WameedPrefs.getPcName(context)
                     selectedDevice = DeviceDiscovery.DiscoveredDevice(
@@ -470,7 +518,7 @@ fun MainScreen(sender: WameedSender, discovery: DeviceDiscovery, updateManager: 
                     )
                 }
                 val ago = (System.currentTimeMillis() - recentSend.first) / 1000
-                statusText = context.getString(R.string.connected_last_send_short, ago)
+                statusText = context.getString(R.string.connection_recent_needs_check, ago)
             }
             else -> {
                 // TCP failed and no recent send: check if PC is at least discoverable
@@ -478,7 +526,7 @@ fun MainScreen(sender: WameedSender, discovery: DeviceDiscovery, updateManager: 
                 if (wasConnected) {
                     // Give a brief grace — mark as Discovered, not Failed
                     connectionState = ConnectionState.Discovered
-                    statusText = context.getString(R.string.discovery_only_no_ws)
+                    statusText = context.getString(R.string.connection_visible_not_ready)
                     // Retry TCP once after a short delay before declaring failure
                     delay(2000)
                     val retryOk = withContextIO { DeviceDiscovery.isTcpReachable(ip, port, 1500) }
@@ -524,10 +572,13 @@ fun MainScreen(sender: WameedSender, discovery: DeviceDiscovery, updateManager: 
                             val recentSendGrace = WameedPrefs.getLastSendInfo(context)
                                 ?.takeIf { (System.currentTimeMillis() - it.first) < 120_000 }
                             if (recentSendGrace != null) {
-                                Log.d("MainActivity", "ServiceStatus(false) ignored — recent send within grace")
+                                val ago = (System.currentTimeMillis() - recentSendGrace.first) / 1000
+                                Log.d("MainActivity", "ServiceStatus(false) -> stale; recent send ${ago}s ago")
+                                connectionState = ConnectionState.Stale
+                                statusText = context.getString(R.string.connection_recent_needs_check, ago)
                             } else {
                                 connectionState = ConnectionState.Discovered
-                                statusText = context.getString(R.string.discovery_only_no_ws)
+                                statusText = context.getString(R.string.connection_visible_not_ready)
                             }
                         }
                     }
@@ -595,10 +646,13 @@ fun MainScreen(sender: WameedSender, discovery: DeviceDiscovery, updateManager: 
                 val recentSendGrace = WameedPrefs.getLastSendInfo(context)
                     ?.takeIf { (System.currentTimeMillis() - it.first) < 120_000 }
                 if (recentSendGrace != null) {
-                    failures = 0 // Reset — recent send keeps us alive
+                    val ago = (System.currentTimeMillis() - recentSendGrace.first) / 1000
+                    connectionState = ConnectionState.Stale
+                    statusText = context.getString(R.string.connection_recent_needs_check, ago)
+                    break
                 } else if (failures == 2) {
                     connectionState = ConnectionState.Discovered
-                    statusText = context.getString(R.string.discovery_only_no_ws)
+                    statusText = context.getString(R.string.connection_visible_not_ready)
                 } else if (failures >= 4) {
                     connectionState = ConnectionState.Failed
                     statusText = context.getString(R.string.send_not_ready_to_pc)
@@ -640,6 +694,8 @@ fun MainScreen(sender: WameedSender, discovery: DeviceDiscovery, updateManager: 
                 modifier = Modifier.padding(padding),
                 connectionState = connectionState,
                 statusText = statusText,
+                isSearchingDevices = isSearchingDevices,
+                sendErrorMessage = sendErrorMessage,
                 selectedDevice = selectedDevice,
                 devices = devices,
                 onConnect = { connectToDevice(it) },
@@ -824,6 +880,8 @@ fun ConnectionTab(
     modifier: Modifier,
     connectionState: ConnectionState,
     statusText: String,
+    isSearchingDevices: Boolean,
+    sendErrorMessage: String,
     selectedDevice: DeviceDiscovery.DiscoveredDevice?,
     devices: Map<String, DeviceDiscovery.DiscoveredDevice>,
     onConnect: (DeviceDiscovery.DiscoveredDevice) -> Unit,
@@ -836,6 +894,12 @@ fun ConnectionTab(
     isSendingBatch: Boolean = false,
     onDiagnose: () -> Unit = {}
 ) {
+    val currentAddress = selectedDevice?.address
+    val visibleDevices = devices.values.filterNot {
+        connectionState == ConnectionState.Connected && it.address == currentAddress
+    }
+    val showingOtherDevices = connectionState == ConnectionState.Connected && currentAddress != null
+
     Column(
         modifier = modifier
             .fillMaxSize()
@@ -905,25 +969,43 @@ fun ConnectionTab(
             Arrangement.SpaceBetween,
             Alignment.CenterVertically
         ) {
-            SectionLabel(stringResource(R.string.section_devices))
-            WameedTextAction(
-                text = stringResource(R.string.action_refresh),
-                onClick = onRefresh,
-                enabled = connectionState != ConnectionState.Searching && !isSendingBatch
+            SectionLabel(
+                stringResource(
+                    if (showingOtherDevices) R.string.section_other_devices else R.string.section_devices
+                )
             )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (isSearchingDevices) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(14.dp),
+                        strokeWidth = 2.dp,
+                        color = WameedInfo
+                    )
+                    Spacer(Modifier.width(6.dp))
+                }
+                WameedTextAction(
+                    text = stringResource(R.string.action_refresh),
+                    onClick = onRefresh,
+                    enabled = !isSearchingDevices && !isSendingBatch
+                )
+            }
         }
         Spacer(Modifier.height(8.dp))
 
         Box(modifier = Modifier.weight(1f)) {
             when {
-                connectionState == ConnectionState.Searching && devices.isEmpty() ->
+                isSearchingDevices && visibleDevices.isEmpty() ->
                     WameedEmptyState(
                         title = stringResource(R.string.searching_devices),
                         showProgress = true
                     )
-                devices.isEmpty() && connectionState != ConnectionState.Connecting -> {
+                visibleDevices.isEmpty() && connectionState != ConnectionState.Connecting -> {
                     WameedEmptyState(
-                        title = stringResource(R.string.no_devices_found),
+                        title = if (showingOtherDevices) {
+                            stringResource(R.string.no_other_devices_found)
+                        } else {
+                            stringResource(R.string.no_devices_found)
+                        },
                         subtitle = stringResource(R.string.no_devices_hint)
                     )
                 }
@@ -932,7 +1014,7 @@ fun ConnectionTab(
                         verticalArrangement = Arrangement.spacedBy(10.dp),
                         contentPadding = PaddingValues(vertical = 4.dp)
                     ) {
-                        items(devices.values.toList(), key = { it.address }) { device ->
+                        items(visibleDevices, key = { it.address }) { device ->
                             val isSel = selectedDevice?.address == device.address
                             DeviceItem(
                                 device = device,
@@ -947,6 +1029,25 @@ fun ConnectionTab(
         }
 
         Spacer(Modifier.height(12.dp))
+
+        if (sendErrorMessage.isNotBlank()) {
+            WameedCard(modifier = Modifier.fillMaxWidth()) {
+                Text(
+                    sendErrorMessage,
+                    fontSize = 13.sp,
+                    color = WameedError,
+                    lineHeight = 18.sp
+                )
+                Spacer(Modifier.height(8.dp))
+                WameedTextAction(
+                    text = stringResource(R.string.diag_fix_hint),
+                    onClick = onDiagnose,
+                    modifier = Modifier.fillMaxWidth(),
+                    color = WameedInfo
+                )
+            }
+            Spacer(Modifier.height(10.dp))
+        }
 
         WameedPrimaryButton(
             text = if (selectedUris.isEmpty()) stringResource(R.string.action_send_file) else stringResource(R.string.send_all),
@@ -1571,6 +1672,7 @@ fun StatusCard(
 ) {
     val dotColor = when (state) {
         ConnectionState.Connected -> WameedSuccess
+        ConnectionState.Stale -> WameedWarning
         ConnectionState.Discovered -> WameedWarning
         ConnectionState.Failed -> WameedError
         ConnectionState.Rejected -> WameedError
@@ -1591,6 +1693,11 @@ fun StatusCard(
         state == ConnectionState.Discovered && device != null -> {
             val name = if (device.name.isNotBlank() && device.name != device.ip) device.name else device.address
             stringResource(R.string.discovered_device, name)
+        }
+        state == ConnectionState.Stale && statusText.isNotBlank() -> statusText
+        state == ConnectionState.Stale && device != null -> {
+            val name = if (device.name.isNotBlank() && device.name != device.ip) device.name else device.address
+            stringResource(R.string.connection_needs_check_device, name)
         }
         statusText.isNotBlank() -> statusText
         else -> stringResource(R.string.not_connected)

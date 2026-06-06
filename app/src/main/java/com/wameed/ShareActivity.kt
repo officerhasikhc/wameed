@@ -47,6 +47,9 @@ import com.wameed.ui.theme.WameedTextSecondary
 import com.wameed.ui.theme.WameedTheme
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
+import java.util.concurrent.atomic.AtomicBoolean
+import kotlin.coroutines.resume
 
 // ─────────────────────────────────────────
 // حالات الإرسال
@@ -510,12 +513,63 @@ private suspend fun startSending(
     onState: (SendState) -> Unit,
     onDone: () -> Unit
 ) {
+    if (shareData != ShareData.Empty && !verifyShareSendReady(sender, activity, onState)) {
+        return
+    }
+
     when (shareData) {
         is ShareData.Text -> sendText(shareData.content, sender, activity, onState, onDone)
         is ShareData.SingleFile -> sendSingleFile(shareData.uri, shareData.mime, sender, activity, onState, onDone)
         is ShareData.MultipleFiles -> sendMultiple(shareData.uris, sender, activity, onState, onDone)
         ShareData.Empty -> onState(SendState.Error(activity.getString(R.string.error_no_content)))
     }
+}
+
+private suspend fun verifyShareSendReady(
+    sender: WameedSender,
+    activity: ShareActivity,
+    onState: (SendState) -> Unit
+): Boolean = suspendCancellableCoroutine { cont ->
+    val resumed = AtomicBoolean(false)
+    fun finish(value: Boolean) {
+        if (resumed.compareAndSet(false, true) && cont.isActive) {
+            cont.resume(value)
+        }
+    }
+
+    activity.runOnUiThread {
+        onState(SendState.Sending(label = activity.getString(R.string.verifying_send_ready)))
+    }
+
+    sender.verifySendReady(object : WameedSender.SendCallback {
+        override fun onSuccess(message: String) {
+            activity.runOnUiThread {
+                onState(SendState.Sending(label = activity.getString(R.string.sending)))
+            }
+            finish(true)
+        }
+
+        override fun onError(error: String) {
+            activity.runOnUiThread {
+                onState(
+                    SendState.Error(
+                        activity.getString(R.string.send_preflight_inline_error, error)
+                    )
+                )
+            }
+            finish(false)
+        }
+
+        override fun onInfo(message: String) {
+            activity.runOnUiThread {
+                onState(SendState.Sending(label = message))
+            }
+        }
+
+        override fun onProgress(percent: Int) {}
+    })
+
+    cont.invokeOnCancellation { resumed.set(true) }
 }
 
 private fun sendText(

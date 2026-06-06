@@ -55,7 +55,13 @@
     <string name="send_path_title">إرسال من الهاتف إلى الكمبيوتر</string>
     <string name="send_ready_to_pc">متصل للإرسال إلى الكمبيوتر</string>
     <string name="send_not_ready_to_pc">غير جاهز للإرسال إلى الكمبيوتر</string>
-    <string name="discovery_only_no_ws">تم اكتشاف الكمبيوتر فقط — منفذ الإرسال محجوب</string>
+    <string name="connection_visible_not_ready">الجهاز ظاهر، لكن الاتصال المباشر غير جاهز</string>
+    <string name="connection_recent_needs_check">كان متصلاً مؤخراً — آخر إرسال قبل %d ث. تحقق قبل الإرسال.</string>
+    <string name="connection_needs_check_device">%s يحتاج تحقق قبل الإرسال</string>
+    <string name="discovery_only_no_ws">الجهاز ظاهر، لكن الاتصال المباشر غير جاهز</string>
+    <string name="verifying_send_ready">جارٍ التحقق من جاهزية الاتصال&#8230;</string>
+    <string name="send_preflight_inline_error">تعذر بدء الإرسال: %s</string>
+    <string name="send_not_ready_inline">لا يمكن الإرسال الآن. تحقق من أن وميض يعمل على الكمبيوتر وأن الجهاز متصل بنفس الشبكة.</string>
     <string name="manual_ip_title">إدخال عنوان الكمبيوتر</string>
     <string name="manual_ip_label">IP:Port</string>
     <string name="manual_ip_placeholder">192.168.1.100:7788</string>
@@ -67,6 +73,8 @@
     <string name="action_cancel">إلغاء</string>
     <string name="action_share">مشاركة</string>
     <string name="section_devices">الأجهزة المتاحة</string>
+    <string name="section_other_devices">أجهزة أخرى متاحة</string>
+    <string name="no_other_devices_found">لا توجد أجهزة أخرى</string>
     <string name="section_recent_files">آخر الملفات</string>
     <string name="quick_action_send">إرسال</string>
     <string name="quick_action_refresh">تحديث</string>
@@ -80,7 +88,7 @@
     <string name="pc_display_mode">وضع العرض على الكمبيوتر</string>
     <string name="pc_display_mode_detail">كيف يتم التعامل مع الملف عند استلامه</string>
     <string name="mode_open">فتح الملف فوراً</string>
-    <string name="mode_path">فتح المجلد المحتوي</string>
+    <string name="mode_path">فتح المجلد وتحديد الملف</string>
     <string name="mode_both">فتح الملف والمجلد معاً</string>
     <string name="mode_none">تنبيه فقط (بدون فتح)</string>
     <string name="keep_alive_title">إبقاء الاتصال نشطاً عند الخروج</string>
@@ -211,6 +219,9 @@
     <string name="update_close">إغلاق</string>
     <string name="update_failed">فشل التحديث. يرجى المحاولة مرة أخرى.</string>
     <string name="update_success">تم التحديث بنجاح ✓</string>
+    <string name="update_install_verified">تم تثبيت الإصدار %s بنجاح.</string>
+    <string name="update_install_not_completed_title">لم يكتمل التحديث</string>
+    <string name="update_install_not_completed_message">فتح وميض مثبت أندرويد، لكن الإصدار المثبت ما زال %2$s بدلاً من %1$s. قد تكون ألغيت التثبيت أو فشل الاستبدال. حاول التحديث مرة أخرى من الإعدادات.</string>
     <string name="update_notification">🔄 تحديث متاح</string>
     <string name="update_notification_desc">نسخة أحدث متاحة للتحديث</string>
     <string name="update_dismiss">تجاهل</string>
@@ -249,7 +260,7 @@
     <string name="diag_test_udp">فحص UDP Discovery</string>
     <string name="diag_test_tcp">فحص TCP</string>
     <string name="diag_test_ping">فحص ICMP Ping</string>
-    <string name="diag_test_ws">فحص WebSocket</string>
+    <string name="diag_test_ws">فحص الاتصال المباشر</string>
     <string name="diag_passed">✅ نجح (%dms)</string>
     <string name="diag_failed">❌ فشل: %s</string>
     <string name="diag_share_results">📤 مشاركة النتائج</string>

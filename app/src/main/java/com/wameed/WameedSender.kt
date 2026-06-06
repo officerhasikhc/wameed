@@ -303,6 +303,99 @@ class WameedSender(private val context: Context) {
         })
     }
 
+    fun verifySendReady(callback: SendCallback) {
+        val ip = WameedPrefs.getPcIp(context)
+        if (ip.isEmpty()) {
+            callback.onError(context.getString(R.string.error_pc_not_configured))
+            return
+        }
+
+        val wsUrl = WameedPrefs.getWsUrl(context)
+        val request = Request.Builder().url(wsUrl).build()
+        val finishedFlag = java.util.concurrent.atomic.AtomicBoolean(false)
+        val lastProgressMs = java.util.concurrent.atomic.AtomicLong(System.currentTimeMillis())
+        val timeoutMs = 25_000L
+
+        Thread {
+            try {
+                while (!finishedFlag.get()) {
+                    if (System.currentTimeMillis() - lastProgressMs.get() > timeoutMs) {
+                        if (finishedFlag.compareAndSet(false, true)) {
+                            callback.onError(context.getString(R.string.error_timeout_pc_no_response))
+                        }
+                        break
+                    }
+                    Thread.sleep(500)
+                }
+            } catch (_: InterruptedException) {
+            }
+        }.apply { isDaemon = true; start() }
+
+        client.newWebSocket(request, object : WebSocketListener() {
+            override fun onOpen(webSocket: WebSocket, response: Response) {
+                lastProgressMs.set(System.currentTimeMillis())
+                val hello = JSONObject().apply {
+                    put("type", "hello")
+                    put("device", WameedPrefs.getDeviceName())
+                    put("device_id", WameedPrefs.getOrCreateDeviceId(context))
+                    put("app_version", BuildConfig.VERSION_NAME)
+                    put("verify_only", true)
+                }
+                webSocket.send(hello.toString())
+            }
+
+            override fun onMessage(webSocket: WebSocket, text: String) {
+                lastProgressMs.set(System.currentTimeMillis())
+                val resp = try { JSONObject(text) } catch (_: Exception) { JSONObject() }
+                when (resp.optString("status")) {
+                    "pairing_required" -> callback.onInfo(context.getString(R.string.status_waiting_for_approval))
+                    "paired", "hello", "ready" -> {
+                        if (finishedFlag.compareAndSet(false, true)) {
+                            WameedPrefs.setLastConnected(context)
+                            callback.onSuccess(context.getString(R.string.send_ready_to_pc))
+                            try { webSocket.close(1000, null) } catch (_: Exception) {}
+                        }
+                    }
+                    "rejected" -> {
+                        if (finishedFlag.compareAndSet(false, true)) {
+                            callback.onError(
+                                resp.optString("message", context.getString(R.string.error_pairing_rejected))
+                            )
+                            try { webSocket.close(1000, null) } catch (_: Exception) {}
+                        }
+                    }
+                    "error" -> {
+                        if (finishedFlag.compareAndSet(false, true)) {
+                            callback.onError(
+                                resp.optString("message", context.getString(R.string.send_not_ready_to_pc))
+                            )
+                            try { webSocket.close(1000, null) } catch (_: Exception) {}
+                        }
+                    }
+                }
+            }
+
+            override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                if (finishedFlag.compareAndSet(false, true)) {
+                    val msg = when {
+                        t is java.net.ConnectException -> context.getString(R.string.error_connect_failed)
+                        t is java.net.SocketTimeoutException -> context.getString(R.string.error_socket_timeout)
+                        else -> context.getString(R.string.error_connection_dropped, t.message ?: "")
+                    }
+                    callback.onError(msg)
+                }
+            }
+
+            override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+                if (!finishedFlag.get() && code != 1000) {
+                    if (finishedFlag.compareAndSet(false, true)) {
+                        callback.onError(context.getString(R.string.error_connect_failed))
+                    }
+                }
+            }
+        })
+    }
+
     fun sendText(text: String, callback: SendCallback) {
         val isUrl = text.startsWith("http://") || text.startsWith("https://")
         val payload = JSONObject().apply {

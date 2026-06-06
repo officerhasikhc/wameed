@@ -42,7 +42,12 @@ class WameedUpdateManager private constructor(private val context: Context) {
 
     private var pendingUpdateUrl: String? = null
     private var pendingReleaseNotes: String? = null
+    private var pendingRemoteVersionCode: Long = 0L
+    private var pendingRemoteVersionName: String = ""
     @Volatile private var isChecking = false
+    private val installPrefs by lazy {
+        context.getSharedPreferences("wameed_update_install", Context.MODE_PRIVATE)
+    }
 
     // حالة التحديث
     private val _updateState = MutableStateFlow<UpdateState>(UpdateState.Idle)
@@ -51,6 +56,10 @@ class WameedUpdateManager private constructor(private val context: Context) {
     companion object {
         private const val TAG = "WameedUpdate"
         private const val APK_FILE_NAME = "wameed-update.apk"
+        private const val KEY_EXPECTED_CODE = "expected_code"
+        private const val KEY_EXPECTED_NAME = "expected_name"
+        private const val KEY_UPDATE_URL = "update_url"
+        private const val KEY_LAUNCHED_AT = "launched_at"
 
         @Volatile
         private var INSTANCE: WameedUpdateManager? = null
@@ -115,6 +124,7 @@ class WameedUpdateManager private constructor(private val context: Context) {
                     val androidJson = jsonObject.getJSONObject("android")
 
                     val remoteVersionCode = androidJson.getInt("versionCode")
+                    val remoteVersionName = androidJson.optString("versionName", "")
                     val updateUrl = androidJson.getString("updateUrl")
                     val releaseNotes = androidJson.getString("releaseNotes")
 
@@ -129,6 +139,8 @@ class WameedUpdateManager private constructor(private val context: Context) {
                     if (remoteVersionCode > BuildConfig.VERSION_CODE) {
                         pendingUpdateUrl = updateUrl
                         pendingReleaseNotes = releaseNotes
+                        pendingRemoteVersionCode = remoteVersionCode.toLong()
+                        pendingRemoteVersionName = remoteVersionName
                         _updateState.value = UpdateState.Available
                         true
                     } else {
@@ -171,6 +183,8 @@ class WameedUpdateManager private constructor(private val context: Context) {
             Log.e(TAG, "No pending update URL")
             return
         }
+        val expectedVersionCode = pendingRemoteVersionCode
+        val expectedVersionName = pendingRemoteVersionName
         Log.w(TAG, "▶ بدء تنزيل APK من: $url")
         val trace = FirebasePerformance.getInstance().newTrace("wameed_update_download").apply {
             putAttribute("app_version", BuildConfig.VERSION_NAME)
@@ -230,13 +244,14 @@ class WameedUpdateManager private constructor(private val context: Context) {
                     }
 
                     Log.w(TAG, "✅ تم تنزيل APK (${apkFile.length() / 1024} KB)")
-                    validateApk(apkFile)
+                    validateApk(apkFile, expectedVersionCode, expectedVersionName)
                     _updateState.value = UpdateState.Downloaded
                 }
 
                 // فتح نافذة التثبيت
                 withContext(Dispatchers.Main) {
                     _updateState.value = UpdateState.Installing
+                    recordInstallAttempt(expectedVersionCode, expectedVersionName, url)
                     installApk(activity, apkFile)
                 }
 
@@ -257,7 +272,7 @@ class WameedUpdateManager private constructor(private val context: Context) {
         }
     }
 
-    private fun validateApk(apkFile: File) {
+    private fun validateApk(apkFile: File, expectedVersionCode: Long, expectedVersionName: String) {
         if (!apkFile.exists() || apkFile.length() < 1024 * 1024) {
             throw IOException("Downloaded APK is missing or unexpectedly small: ${apkFile.length()} bytes")
         }
@@ -268,6 +283,72 @@ class WameedUpdateManager private constructor(private val context: Context) {
                 throw IOException("Downloaded file is not a valid APK/ZIP payload")
             }
         }
+
+        val packageInfo = context.packageManager.getPackageArchiveInfo(apkFile.absolutePath, 0)
+            ?: throw IOException("Downloaded APK metadata could not be read")
+        val packageName = packageInfo.packageName
+        if (packageName != context.packageName) {
+            throw IOException("Downloaded APK package mismatch: $packageName")
+        }
+
+        @Suppress("DEPRECATION")
+        val apkVersionCode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            packageInfo.longVersionCode
+        } else {
+            packageInfo.versionCode.toLong()
+        }
+        val apkVersionName = packageInfo.versionName.orEmpty()
+
+        if (expectedVersionCode > 0L && apkVersionCode != expectedVersionCode) {
+            throw IOException("Downloaded APK versionCode=$apkVersionCode, expected=$expectedVersionCode")
+        }
+        if (expectedVersionName.isNotBlank() && apkVersionName != expectedVersionName) {
+            throw IOException("Downloaded APK versionName=$apkVersionName, expected=$expectedVersionName")
+        }
+
+        Log.w(TAG, "✅ APK metadata verified: $packageName $apkVersionName ($apkVersionCode)")
+    }
+
+    private fun recordInstallAttempt(expectedVersionCode: Long, expectedVersionName: String, updateUrl: String) {
+        installPrefs.edit()
+            .putLong(KEY_EXPECTED_CODE, expectedVersionCode)
+            .putString(KEY_EXPECTED_NAME, expectedVersionName)
+            .putString(KEY_UPDATE_URL, updateUrl)
+            .putLong(KEY_LAUNCHED_AT, System.currentTimeMillis())
+            .apply()
+    }
+
+    private fun clearInstallAttempt() {
+        installPrefs.edit().clear().apply()
+    }
+
+    fun consumePendingInstallResult(): UpdateInstallResult? {
+        val expectedCode = installPrefs.getLong(KEY_EXPECTED_CODE, 0L)
+        if (expectedCode <= 0L) return null
+
+        val expectedName = installPrefs.getString(KEY_EXPECTED_NAME, "").orEmpty()
+        val updateUrl = installPrefs.getString(KEY_UPDATE_URL, "").orEmpty()
+        val launchedAt = installPrefs.getLong(KEY_LAUNCHED_AT, 0L)
+        val installedCode = BuildConfig.VERSION_CODE.toLong()
+        val installedName = BuildConfig.VERSION_NAME
+        val completed = installedCode >= expectedCode
+
+        clearInstallAttempt()
+        _updateState.value = if (completed) {
+            UpdateState.Installed
+        } else {
+            UpdateState.InstallNotCompleted(expectedName)
+        }
+
+        return UpdateInstallResult(
+            expectedVersionCode = expectedCode,
+            expectedVersionName = expectedName,
+            installedVersionCode = installedCode,
+            installedVersionName = installedName,
+            updateUrl = updateUrl,
+            launchedAtMs = launchedAt,
+            completed = completed
+        )
     }
 
     /**
@@ -326,6 +407,16 @@ class WameedUpdateManager private constructor(private val context: Context) {
     }
 }
 
+data class UpdateInstallResult(
+    val expectedVersionCode: Long,
+    val expectedVersionName: String,
+    val installedVersionCode: Long,
+    val installedVersionName: String,
+    val updateUrl: String,
+    val launchedAtMs: Long,
+    val completed: Boolean
+)
+
 /**
  * حالات التحديث الممكنة
  */
@@ -338,5 +429,6 @@ sealed class UpdateState {
     object Downloaded : UpdateState()
     object Installing : UpdateState()
     object Installed : UpdateState()
+    data class InstallNotCompleted(val expectedVersionName: String) : UpdateState()
     data class Failed(val errorCode: Int) : UpdateState()
 }

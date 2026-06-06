@@ -1,3 +1,5 @@
+param([switch]$RequireArtifacts)
+
 $ErrorActionPreference = "Stop"
 
 $root = Split-Path -Parent $PSScriptRoot
@@ -14,6 +16,21 @@ function Read-VersionProperties {
         $props[$line.Substring(0, $idx).Trim()] = $line.Substring($idx + 1).Trim()
     }
     return $props
+}
+
+function Find-Aapt {
+    $roots = New-Object System.Collections.Generic.List[string]
+    $roots.Add((Join-Path $env:LOCALAPPDATA "Android\Sdk\build-tools"))
+    if ($env:ANDROID_HOME) { $roots.Add((Join-Path $env:ANDROID_HOME "build-tools")) }
+    if ($env:ANDROID_SDK_ROOT) { $roots.Add((Join-Path $env:ANDROID_SDK_ROOT "build-tools")) }
+
+    foreach ($sdkRoot in ($roots | Where-Object { $_ -and (Test-Path -LiteralPath $_) } | Select-Object -Unique)) {
+        $aapt = Get-ChildItem -Path $sdkRoot -Recurse -Filter "aapt.exe" -ErrorAction SilentlyContinue |
+            Sort-Object FullName -Descending |
+            Select-Object -First 1
+        if ($aapt) { return $aapt.FullName }
+    }
+    return $null
 }
 
 $props = Read-VersionProperties $versionFile
@@ -58,9 +75,42 @@ $versionInfoPath = Join-Path $root "windows-receiver\version_info.txt"
 $versionInfo = Get-Content -LiteralPath $versionInfoPath -Raw -Encoding UTF8
 if ($versionInfo -notmatch "ProductVersion', '$([regex]::Escape($versionName))'") { $errors.Add("version_info.txt does not contain ProductVersion $versionName.") }
 
+if ($RequireArtifacts) {
+    $apkPath = Join-Path $root "release\Wameed-Android.apk"
+    if (-not (Test-Path -LiteralPath $apkPath)) {
+        $errors.Add("release/Wameed-Android.apk is missing.")
+    } else {
+        $aapt = Find-Aapt
+        if (-not $aapt) {
+            $errors.Add("Could not find Android SDK aapt.exe to inspect release/Wameed-Android.apk.")
+        } else {
+            $badging = & $aapt dump badging $apkPath 2>&1
+            if ($LASTEXITCODE -ne 0) {
+                $errors.Add("aapt failed to inspect release/Wameed-Android.apk: $badging")
+            } else {
+                $match = [regex]::Match(($badging -join "`n"), "package: name='([^']+)' versionCode='([^']+)' versionName='([^']*)'")
+                if (-not $match.Success) {
+                    $errors.Add("Could not parse package metadata from release/Wameed-Android.apk.")
+                } else {
+                    $apkPackage = $match.Groups[1].Value
+                    $apkCode = [int]$match.Groups[2].Value
+                    $apkName = $match.Groups[3].Value
+                    if ($apkPackage -ne "com.wameed") { $errors.Add("release/Wameed-Android.apk package is $apkPackage, expected com.wameed.") }
+                    if ($apkCode -ne $versionCode) { $errors.Add("release/Wameed-Android.apk versionCode is $apkCode, expected $versionCode.") }
+                    if ($apkName -ne $versionName) { $errors.Add("release/Wameed-Android.apk versionName is $apkName, expected $versionName.") }
+                }
+            }
+        }
+    }
+}
+
 if ($errors.Count -gt 0) {
     $errors | ForEach-Object { Write-Error $_ }
     throw "Version verification failed."
 }
 
 Write-Host "Version verification passed: $versionName ($versionCode)"
+if ($RequireArtifacts -and (Test-Path -LiteralPath (Join-Path $root "release\Wameed-Android.apk"))) {
+    $hash = Get-FileHash -LiteralPath (Join-Path $root "release\Wameed-Android.apk") -Algorithm SHA256
+    Write-Host "Android artifact SHA256: $($hash.Hash)"
+}

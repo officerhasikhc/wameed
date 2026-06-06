@@ -1,0 +1,12 @@
+لتثبيت النسخ الجديد 
+version.properties (line 1)
+غيّر فيه:
+versionName
+versionCode
+releaseTag
+ملاحظات الإصدار إذا أردت: androidReleaseNotes وwindowsReleaseNotes
+
+.\scripts\sync-version.ps1
+.\scripts\verify-version.ps1
+
+يقوم السريبت بتحديث json والبقيه
