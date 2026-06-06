@@ -11,6 +11,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -37,11 +38,15 @@ import com.wameed.ui.theme.WameedWarning
 fun WameedUpdateDialog(
     isVisible: Boolean,
     updateState: UpdateState,
+    updateInfo: UpdateInfo?,
     onUpdateAccepted: () -> Unit,
     onUpdateDeclined: () -> Unit,
     onDismiss: () -> Unit
 ) {
     if (isVisible) {
+        val remoteVersion = updateInfo?.let {
+            it.remoteVersionName.ifBlank { it.remoteVersionCode.toString() }
+        }
         Dialog(onDismissRequest = onDismiss) {
             WameedCard(
                 modifier = Modifier
@@ -66,10 +71,10 @@ fun WameedUpdateDialog(
                     // العنوان
                     Text(
                         text = when (updateState) {
-                            is UpdateState.Available -> "تحديث جديد"
-                            is UpdateState.Downloading -> "جاري التحميل..."
-                            is UpdateState.Installing -> "جاري التثبيت..."
-                            else -> "تحديث التطبيق"
+                            is UpdateState.Available -> stringResource(R.string.update_available)
+                            is UpdateState.Downloading -> stringResource(R.string.update_downloading)
+                            is UpdateState.Installing -> stringResource(R.string.update_installing)
+                            else -> stringResource(R.string.update_available)
                         },
                         fontSize = 20.sp,
                         fontWeight = FontWeight.Bold,
@@ -79,16 +84,52 @@ fun WameedUpdateDialog(
                     // الوصف
                     Text(
                         text = when (updateState) {
-                            is UpdateState.Available -> "نسخة أحدث متاحة. التحديث يحمل تحسينات وميزات جديدة."
-                            is UpdateState.Downloading -> "يتم تحميل التحديث..."
-                            is UpdateState.Installing -> "يتم تثبيت التحديث..."
-                            else -> "تحديث التطبيق"
+                            is UpdateState.Available -> remoteVersion?.let {
+                                stringResource(R.string.update_available_detail, it)
+                            } ?: stringResource(R.string.update_description)
+                            is UpdateState.Downloading -> stringResource(R.string.update_downloading_desc)
+                            is UpdateState.Installing -> stringResource(R.string.update_installing_desc)
+                            else -> stringResource(R.string.update_description)
                         },
                         fontSize = 14.sp,
                         textAlign = TextAlign.Center,
                         color = WameedTextSecondary,
                         lineHeight = 20.sp
                     )
+
+                    if (updateInfo != null) {
+                        Column(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Text(
+                                text = stringResource(
+                                    R.string.update_installed_version_detail,
+                                    updateInfo.localVersionName,
+                                    updateInfo.localVersionCode
+                                ),
+                                fontSize = 12.sp,
+                                color = WameedTextSecondary
+                            )
+                            Text(
+                                text = stringResource(
+                                    R.string.update_remote_version_detail,
+                                    remoteVersion ?: updateInfo.remoteVersionCode.toString(),
+                                    updateInfo.remoteVersionCode
+                                ),
+                                fontSize = 12.sp,
+                                color = WameedTextSecondary
+                            )
+                            if (updateInfo.releaseNotes.isNotBlank()) {
+                                Text(
+                                    text = stringResource(R.string.update_release_notes_detail, updateInfo.releaseNotes),
+                                    fontSize = 12.sp,
+                                    color = WameedTextSecondary,
+                                    lineHeight = 18.sp
+                                )
+                            }
+                        }
+                    }
                     
                     // شريط التقدم
                     if (updateState is UpdateState.Downloading) {
@@ -123,13 +164,13 @@ fun WameedUpdateDialog(
                                 horizontalArrangement = Arrangement.spacedBy(12.dp)
                             ) {
                                 WameedSecondaryButton(
-                                    text = "لاحقاً",
+                                    text = stringResource(R.string.update_later),
                                     onClick = onUpdateDeclined,
                                     modifier = Modifier.weight(1f)
                                 )
                                 
                                 WameedPrimaryButton(
-                                    text = "تحديث الآن",
+                                    text = stringResource(R.string.update_now),
                                     onClick = onUpdateAccepted,
                                     modifier = Modifier.weight(1f)
                                 )
@@ -146,14 +187,14 @@ fun WameedUpdateDialog(
                                 verticalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
                                 Text(
-                                    text = "تعذر التحديث، حاول لاحقاً",
+                                    text = stringResource(R.string.update_failed),
                                     fontSize = 12.sp,
                                     color = WameedError,
                                     textAlign = TextAlign.Center
                                 )
                                 
                                 WameedPrimaryButton(
-                                    text = "إغلاق",
+                                    text = stringResource(R.string.update_close),
                                     onClick = onDismiss,
                                     modifier = Modifier.fillMaxWidth()
                                 )
@@ -162,7 +203,7 @@ fun WameedUpdateDialog(
                         
                         else -> {
                             WameedPrimaryButton(
-                                text = "إغلاق",
+                                text = stringResource(R.string.update_close),
                                 onClick = onDismiss,
                                 modifier = Modifier.fillMaxWidth()
                             )

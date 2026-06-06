@@ -1438,6 +1438,7 @@ fun SettingsTab(modifier: Modifier, updateManager: WameedUpdateManager, onShowTr
     var currentLang by remember { mutableStateOf(WameedPrefs.getLanguage(context)) }
     var keepAlive by remember { mutableStateOf(WameedPrefs.isKeepAliveEnabled(context)) }
     val updateState by updateManager.updateState.collectAsState()
+    val updateInfo by updateManager.lastUpdateInfo.collectAsState()
     val scope = rememberCoroutineScope()
 
     val scrollState = rememberScrollState()
@@ -1599,18 +1600,102 @@ fun SettingsTab(modifier: Modifier, updateManager: WameedUpdateManager, onShowTr
             Spacer(Modifier.height(6.dp))
             Text(stringResource(R.string.about_version, BuildConfig.VERSION_NAME), fontSize = 12.sp, color = WameedTextSecondary)
             Text(stringResource(R.string.about_detail), fontSize = 12.sp, color = WameedTextSecondary)
+            Spacer(Modifier.height(12.dp))
+            UpdateStatusDetails(updateState = updateState, updateInfo = updateInfo)
             Spacer(Modifier.height(16.dp))
             WameedPrimaryButton(
                 text = when (updateState) {
+                    is UpdateState.Checking -> stringResource(R.string.checking_updates)
+                    is UpdateState.Available -> stringResource(R.string.update_now)
                     is UpdateState.UpToDate -> stringResource(R.string.app_up_to_date)
-                    is UpdateState.Failed -> "تعذر التحقق، حاول لاحقاً"
+                    is UpdateState.Failed -> stringResource(R.string.update_check_failed_short)
+                    is UpdateState.Downloading -> stringResource(R.string.update_downloading)
+                    is UpdateState.Installing -> stringResource(R.string.update_installing)
                     else -> stringResource(R.string.check_for_updates)
                 },
                 onClick = {
-                    scope.launch { updateManager.checkForUpdates(isManual = true) }
+                    scope.launch {
+                        if (updateState is UpdateState.Available) {
+                            updateManager.startFlexibleUpdate(context as ComponentActivity)
+                        } else {
+                            updateManager.checkForUpdates(isManual = true)
+                        }
+                    }
                 },
-                enabled = updateState !is UpdateState.Checking,
-                loading = updateState is UpdateState.Checking
+                enabled = updateState !is UpdateState.Checking &&
+                    updateState !is UpdateState.Downloading &&
+                    updateState !is UpdateState.Installing,
+                loading = updateState is UpdateState.Checking || updateState is UpdateState.Downloading
+            )
+        }
+    }
+}
+
+@Composable
+private fun UpdateStatusDetails(updateState: UpdateState, updateInfo: UpdateInfo?) {
+    val statusColor = when {
+        updateState is UpdateState.Available -> WameedSuccess
+        updateState is UpdateState.Failed -> WameedError
+        updateState is UpdateState.Checking -> WameedInfo
+        updateInfo?.hasSameCodeVersionMismatch == true -> WameedWarning
+        updateState is UpdateState.UpToDate -> WameedSuccess
+        else -> WameedTextSecondary
+    }
+
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text(
+            text = stringResource(
+                R.string.update_installed_version_detail,
+                BuildConfig.VERSION_NAME,
+                BuildConfig.VERSION_CODE
+            ),
+            fontSize = 12.sp,
+            color = WameedTextSecondary
+        )
+
+        if (updateState is UpdateState.Checking) {
+            Text(stringResource(R.string.checking_updates), fontSize = 12.sp, color = WameedInfo)
+            return@Column
+        }
+
+        if (updateInfo == null) {
+            Text(stringResource(R.string.update_check_hint), fontSize = 12.sp, color = WameedTextSecondary)
+            return@Column
+        }
+
+        val remoteVersion = updateInfo.remoteVersionName.ifBlank { updateInfo.remoteVersionCode.toString() }
+        Text(
+            text = stringResource(
+                R.string.update_remote_version_detail,
+                remoteVersion,
+                updateInfo.remoteVersionCode
+            ),
+            fontSize = 12.sp,
+            color = WameedTextSecondary
+        )
+
+        val statusText = when {
+            updateState is UpdateState.Available || updateInfo.isAvailable ->
+                stringResource(R.string.update_available_detail, remoteVersion)
+            updateInfo.hasSameCodeVersionMismatch ->
+                stringResource(
+                    R.string.update_same_code_warning,
+                    updateInfo.remoteVersionCode,
+                    updateInfo.localVersionCode
+                )
+            updateState is UpdateState.Failed ->
+                stringResource(R.string.update_check_failed_detail)
+            else ->
+                stringResource(R.string.update_latest_detail)
+        }
+        Text(statusText, fontSize = 12.sp, color = statusColor, lineHeight = 18.sp)
+
+        if (updateInfo.releaseNotes.isNotBlank()) {
+            Text(
+                text = stringResource(R.string.update_release_notes_detail, updateInfo.releaseNotes),
+                fontSize = 12.sp,
+                color = WameedTextSecondary,
+                lineHeight = 18.sp
             )
         }
     }

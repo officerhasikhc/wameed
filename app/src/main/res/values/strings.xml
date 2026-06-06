@@ -229,6 +229,15 @@
     <string name="check_for_updates">البحث عن تحديثات</string>
     <string name="checking_updates">جاري البحث عن تحديثات...</string>
     <string name="app_up_to_date">أحدث إصدار مثبت ✓</string>
+    <string name="update_check_failed_short">تعذر التحقق</string>
+    <string name="update_installed_version_detail">الإصدار المثبت: %1$s (البناء %2$d)</string>
+    <string name="update_remote_version_detail">آخر إصدار على GitHub: %1$s (البناء %2$d)</string>
+    <string name="update_check_hint">اضغط للبحث عن أحدث نسخة منشورة.</string>
+    <string name="update_check_failed_detail">لم نتمكن من قراءة ملف التحديث. تحقق من الإنترنت أو من رفع update.json.</string>
+    <string name="update_latest_detail">لا يوجد تحديث جديد. النسخة المنشورة ليست أعلى من المثبتة.</string>
+    <string name="update_available_detail">تحديث %1$s متاح الآن.</string>
+    <string name="update_same_code_warning">تنبيه: اسم النسخة البعيدة مختلف، لكن رقم البناء %1$d ليس أعلى من المثبت %2$d. ارفع versionCode أعلى حتى يراه أندرويد كتحديث.</string>
+    <string name="update_release_notes_detail">التفاصيل: %1$s</string>
 
     <!-- رسائل حالة الاقتران الجديدة -->
     <string name="status_waiting_for_approval">⏳ في انتظار موافقة الاقتران على الكمبيوتر&#8230;</string>

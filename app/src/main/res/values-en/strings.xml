@@ -207,6 +207,15 @@
     <string name="check_for_updates">Check for Updates</string>
     <string name="checking_updates">Checking...</string>
     <string name="app_up_to_date">Latest version installed ✓</string>
+    <string name="update_check_failed_short">Could not check</string>
+    <string name="update_installed_version_detail">Installed version: %1$s (build %2$d)</string>
+    <string name="update_remote_version_detail">Latest version on GitHub: %1$s (build %2$d)</string>
+    <string name="update_check_hint">Tap to check the latest published version.</string>
+    <string name="update_check_failed_detail">Could not read the update file. Check the internet connection or update.json.</string>
+    <string name="update_latest_detail">No new update. The published build is not newer than the installed one.</string>
+    <string name="update_available_detail">Update %1$s is available now.</string>
+    <string name="update_same_code_warning">Warning: the remote version name changed, but build %1$d is not newer than installed build %2$d. Publish a higher versionCode so Android can treat it as an update.</string>
+    <string name="update_release_notes_detail">Details: %1$s</string>
     <string name="status_connected_to">Connected to {name}</string>
     <string name="status_waiting_for_approval">⏳ Waiting for pairing approval on the PC&#8230;</string>
     <string name="status_pairing_pending">Waiting for pairing</string>

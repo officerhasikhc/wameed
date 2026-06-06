@@ -23,6 +23,7 @@ fun UpdateIntegration(
     context: Context
 ) {
     val updateState by updateManager.updateState.collectAsState()
+    val updateInfo by updateManager.lastUpdateInfo.collectAsState()
     val showUpdateDialog = remember { mutableStateOf(false) }
     val showUpdateNotification = remember { mutableStateOf(false) }
     var installResult by remember { mutableStateOf<UpdateInstallResult?>(null) }
@@ -92,6 +93,7 @@ fun UpdateIntegration(
     WameedUpdateDialog(
         isVisible = showUpdateDialog.value,
         updateState = updateState,
+        updateInfo = updateInfo,
         onUpdateAccepted = {
             coroutineScope.launch {
                 updateManager.startFlexibleUpdate(context as ComponentActivity)
@@ -108,7 +110,9 @@ fun UpdateIntegration(
     // Update notification (small banner)
     WameedUpdateNotification(
         isVisible = showUpdateNotification.value && updateState is UpdateState.Available,
-        message = "توجد نسخة جديدة من تطبيق وميض",
+        message = updateInfo?.remoteVersionName?.takeIf { it.isNotBlank() }?.let {
+            stringResource(R.string.update_available_detail, it)
+        } ?: stringResource(R.string.update_notification_desc),
         onUpdateClick = {
             showUpdateDialog.value = true
             showUpdateNotification.value = false

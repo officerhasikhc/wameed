@@ -49,9 +49,11 @@ class WameedUpdateManager private constructor(private val context: Context) {
         context.getSharedPreferences("wameed_update_install", Context.MODE_PRIVATE)
     }
 
-    // حالة التحديث
+    // حالة التحديث وآخر نتيجة مفصلة للفحص
     private val _updateState = MutableStateFlow<UpdateState>(UpdateState.Idle)
     val updateState: StateFlow<UpdateState> = _updateState.asStateFlow()
+    private val _lastUpdateInfo = MutableStateFlow<UpdateInfo?>(null)
+    val lastUpdateInfo: StateFlow<UpdateInfo?> = _lastUpdateInfo.asStateFlow()
 
     companion object {
         private const val TAG = "WameedUpdate"
@@ -71,9 +73,15 @@ class WameedUpdateManager private constructor(private val context: Context) {
         }
     }
 
-    private fun updateRequest(url: String): Request {
+    private fun updateRequest(url: String, cacheBust: Boolean = false): Request {
+        val finalUrl = if (cacheBust) {
+            val separator = if (url.contains("?")) "&" else "?"
+            "$url${separator}t=${System.currentTimeMillis()}"
+        } else {
+            url
+        }
         return Request.Builder()
-            .url(url)
+            .url(finalUrl)
             .header("User-Agent", "Wameed-Android/${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})")
             .header("Cache-Control", "no-cache")
             .header("Pragma", "no-cache")
@@ -88,6 +96,7 @@ class WameedUpdateManager private constructor(private val context: Context) {
         Log.w(TAG, "▶ checkForUpdates(isManual=$isManual) started")
         if (isChecking) {
             Log.w(TAG, "▶ Already checking — skipped")
+            if (isManual) _updateState.value = UpdateState.Checking
             return false
         }
         isChecking = true
@@ -102,36 +111,46 @@ class WameedUpdateManager private constructor(private val context: Context) {
             try {
                 if (isManual) delay(800)
                 Log.w(TAG, "▶ Fetching: $UPDATE_JSON_URL")
-                val request = updateRequest(UPDATE_JSON_URL)
+                val request = updateRequest(UPDATE_JSON_URL, cacheBust = true)
                 client.newCall(request).execute().use { response ->
                     Log.w(TAG, "▶ Response code: ${response.code}")
                     if (!response.isSuccessful) {
                         Log.e(TAG, "✗ HTTP error: ${response.code} ${response.message}")
                         if (isManual) {
-                            if (response.code == 404) {
-                                _updateState.value = UpdateState.UpToDate
-                            } else {
-                                _updateState.value = UpdateState.Failed(response.code)
-                            }
-                            delay(3000)
-                            _updateState.value = UpdateState.Idle
+                            _updateState.value = UpdateState.Failed(response.code)
                         }
                         return@withContext false
                     }
 
-                    val jsonData = response.body?.string() ?: return@withContext false
+                    val jsonData = response.body?.string()
+                    if (jsonData.isNullOrBlank()) {
+                        Log.e(TAG, "✗ Empty update metadata")
+                        if (isManual) _updateState.value = UpdateState.Failed(-2)
+                        return@withContext false
+                    }
                     val jsonObject = JSONObject(jsonData)
                     val androidJson = jsonObject.getJSONObject("android")
 
                     val remoteVersionCode = androidJson.getInt("versionCode")
                     val remoteVersionName = androidJson.optString("versionName", "")
                     val updateUrl = androidJson.getString("updateUrl")
-                    val releaseNotes = androidJson.getString("releaseNotes")
+                    val releaseNotes = androidJson.optString("releaseNotes", "")
+                    val updateInfo = UpdateInfo(
+                        localVersionCode = BuildConfig.VERSION_CODE.toLong(),
+                        localVersionName = BuildConfig.VERSION_NAME,
+                        remoteVersionCode = remoteVersionCode.toLong(),
+                        remoteVersionName = remoteVersionName,
+                        updateUrl = updateUrl,
+                        releaseNotes = releaseNotes,
+                        checkedAtMs = System.currentTimeMillis()
+                    )
+                    _lastUpdateInfo.value = updateInfo
 
                     Log.w(TAG, "══════════════════════════════════")
                     Log.w(TAG, "LOCAL  versionCode = ${BuildConfig.VERSION_CODE}")
                     Log.w(TAG, "LOCAL  versionName = ${BuildConfig.VERSION_NAME}")
                     Log.w(TAG, "REMOTE versionCode = $remoteVersionCode")
+                    Log.w(TAG, "REMOTE versionName = $remoteVersionName")
                     Log.w(TAG, "REMOTE updateUrl   = $updateUrl")
                     Log.w(TAG, "RESULT: update available = ${remoteVersionCode > BuildConfig.VERSION_CODE}")
                     Log.w(TAG, "══════════════════════════════════")
@@ -144,10 +163,8 @@ class WameedUpdateManager private constructor(private val context: Context) {
                         _updateState.value = UpdateState.Available
                         true
                     } else {
-                        _updateState.value = UpdateState.UpToDate
-                        if (isManual) {
-                            delay(3000)
-                            _updateState.value = UpdateState.Idle
+                        if (isManual || _updateState.value is UpdateState.Available) {
+                            _updateState.value = UpdateState.UpToDate
                         }
                         false
                     }
@@ -164,8 +181,6 @@ class WameedUpdateManager private constructor(private val context: Context) {
                 )
                 if (isManual) {
                     _updateState.value = UpdateState.Failed(-1)
-                    delay(3000)
-                    _updateState.value = UpdateState.Idle
                 }
                 false
             } finally {
@@ -416,6 +431,24 @@ data class UpdateInstallResult(
     val launchedAtMs: Long,
     val completed: Boolean
 )
+
+data class UpdateInfo(
+    val localVersionCode: Long,
+    val localVersionName: String,
+    val remoteVersionCode: Long,
+    val remoteVersionName: String,
+    val updateUrl: String,
+    val releaseNotes: String,
+    val checkedAtMs: Long
+) {
+    val isAvailable: Boolean
+        get() = remoteVersionCode > localVersionCode
+
+    val hasSameCodeVersionMismatch: Boolean
+        get() = remoteVersionName.isNotBlank() &&
+            remoteVersionName != localVersionName &&
+            remoteVersionCode <= localVersionCode
+}
 
 /**
  * حالات التحديث الممكنة

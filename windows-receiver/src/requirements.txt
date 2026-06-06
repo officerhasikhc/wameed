@@ -8,3 +8,4 @@ customtkinter==5.2.2
 plyer>=2.1.0
 pyperclip>=1.8.2
 sentry-sdk>=2.0.0
+winotify>=1.1.0

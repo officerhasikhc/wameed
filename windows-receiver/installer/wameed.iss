@@ -9,6 +9,7 @@
 #define AppPublisher   "Wameed Project"
 #define AppExe         "Wameed.exe"
 #define AppURL         "https://github.com/"
+#define AppUserModelID "Wameed.Project.Desktop"
 
 [Setup]
 AppId={{A1C3F7D2-2E7D-4E32-9C11-WAMEED00001}}
@@ -62,9 +63,9 @@ Source: "README-install.md";  DestDir: "{app}"; Flags: ignoreversion isreadme
 Source: "LICENSE.txt";        DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
-Name: "{autoprograms}\{#AppName} — {#AppNameAr}"; Filename: "{app}\{#AppExe}"; IconFilename: "{app}\wameed.ico"
-Name: "{autodesktop}\{#AppName} — {#AppNameAr}";  Filename: "{app}\{#AppExe}"; IconFilename: "{app}\wameed.ico"; Tasks: desktopicon
-Name: "{userstartup}\{#AppName}"; Filename: "{app}\{#AppExe}"; Tasks: autostart
+Name: "{autoprograms}\{#AppName} — {#AppNameAr}"; Filename: "{app}\{#AppExe}"; IconFilename: "{app}\wameed.ico"; AppUserModelID: "{#AppUserModelID}"
+Name: "{autodesktop}\{#AppName} — {#AppNameAr}";  Filename: "{app}\{#AppExe}"; IconFilename: "{app}\wameed.ico"; AppUserModelID: "{#AppUserModelID}"; Tasks: desktopicon
+Name: "{userstartup}\{#AppName}"; Filename: "{app}\{#AppExe}"; AppUserModelID: "{#AppUserModelID}"; Tasks: autostart
 
 [Run]
 ; Firewall exceptions (TCP 7788 WebSocket, UDP 7789 discovery)

@@ -4,6 +4,10 @@ from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 hiddenimports = ['websockets.legacy.server', 'websockets.legacy.protocol']
 hiddenimports += collect_submodules('websockets')
 hiddenimports += collect_submodules('customtkinter')
+try:
+    hiddenimports += collect_submodules('winotify')
+except Exception:
+    pass
 datas = [('src\\wameed.ico', '.'), ('..\\version.properties', '.')]
 datas += collect_data_files('customtkinter')
 

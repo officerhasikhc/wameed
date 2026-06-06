@@ -64,9 +64,21 @@ except Exception:
 # ======================== Configuration ========================
 VERSION = VERSION_NAME
 APP_NAME = "وميض (Wameed)"
+WINDOWS_APP_ID = "Wameed.Project.Desktop"
 PORT_WS = 7788
 PORT_UDP = 7789
 INSTANCE_CONTROL_PORT = 17788
+
+def _set_windows_app_user_model_id():
+    if os.name != "nt":
+        return
+    try:
+        import ctypes
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(WINDOWS_APP_ID)
+    except Exception:
+        pass
+
+_set_windows_app_user_model_id()
 
 
 class T:
@@ -750,42 +762,49 @@ def _open_file_best_effort(filepath):
 
 
 def _reveal_file_in_folder(filepath):
-    folder = os.path.dirname(filepath)
+    target = os.path.abspath(filepath)
+    folder = os.path.dirname(target)
     try:
+        if not os.path.isdir(folder):
+            logger.warning(f"Auto-open folder skipped; folder no longer exists: {folder}")
+            return False
+
         flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-        if os.path.isfile(filepath):
+        if os.path.isfile(target):
             subprocess.Popen(
-                ["explorer.exe", f"/select,{filepath}"],
+                ["explorer.exe", f'/select,"{target}"'],
                 close_fds=True,
                 creationflags=flags,
             )
-        elif os.path.isdir(folder):
-            os.startfile(folder)
         else:
-            logger.warning(f"Auto-open folder skipped; folder no longer exists: {folder}")
-            return False
-        logger.info(f"Auto-open folder requested for: {os.path.basename(filepath)}")
+            subprocess.Popen(
+                ["explorer.exe", folder],
+                close_fds=True,
+                creationflags=flags,
+            )
+        logger.info(f"Auto-open folder requested for: {os.path.basename(target)}")
         return True
     except Exception as exc:
-        logger.warning(f"Auto-open folder failed for {os.path.basename(filepath)}: {exc}")
+        logger.warning(f"Auto-open folder failed for {os.path.basename(target)}: {exc}")
         report_windows_issue(
             "auto_open_folder_failed",
             exc,
             level="warning",
             operation="receive",
             phase="post_receive_open",
-            file_ext=os.path.splitext(filepath)[1].lower()[:20],
+            file_ext=os.path.splitext(target)[1].lower()[:20],
         )
         return False
 
 
 def _schedule_folder_reveal(filepath):
-    folder = os.path.dirname(filepath)
+    target = os.path.abspath(filepath)
+    folder = os.path.dirname(target)
 
     def reveal_latest():
         with _folder_reveal_lock:
             _folder_reveal_timers.pop(folder, None)
-        _reveal_file_in_folder(filepath)
+        _reveal_file_in_folder(target)
 
     with _folder_reveal_lock:
         old_timer = _folder_reveal_timers.get(folder)
@@ -3998,15 +4017,21 @@ async def handle_client(websocket, path=None):
 def show_notification(title: str, message: str):
     """
     إشعار Windows Toast موثوق.
-    يستخدم plyer أولاً (يدعم العربية وكل Unicode)
-    ثم يرجع لـ winsound فقط إذا فشل plyer.
+    يستخدم winotify/WinRT أولاً حتى يظهر في مركز إشعارات ويندوز،
+    ثم يرجع لـ plyer وبعدها صوت بسيط إذا تعذر عرض Toast.
     """
     safe_title   = str(title)[:64]
     safe_message = str(message)[:200]
+    icon_path = get_resource_path("wameed.ico")
+
+    if _show_notification_winotify(safe_title, safe_message, icon_path):
+        return True
+
+    if _show_notification_winrt(safe_title, safe_message):
+        return True
 
     try:
         from plyer import notification as _notif
-        icon_path = get_resource_path("wameed.ico")
         _notif.notify(
             title    = safe_title,
             message  = safe_message,
@@ -4015,6 +4040,7 @@ def show_notification(title: str, message: str):
             timeout  = 4,
         )
         logger.debug(f"🔔 إشعار: {safe_title}")
+        return True
     except Exception as e:
         logger.warning(f"plyer notification failed: {e}")
         try:
@@ -4022,6 +4048,67 @@ def show_notification(title: str, message: str):
             winsound.MessageBeep(winsound.MB_OK)
         except Exception:
             pass
+        return False
+
+
+def _show_notification_winotify(title: str, message: str, icon_path: str) -> bool:
+    if os.name != "nt":
+        return False
+    try:
+        from winotify import Notification, audio
+        toast = Notification(
+            app_id=WINDOWS_APP_ID,
+            title=title,
+            msg=message,
+            icon=icon_path if os.path.exists(icon_path) else "",
+        )
+        toast.set_audio(audio.Default, loop=False)
+        toast.show()
+        logger.debug(f"🔔 Winotify notification: {title}")
+        return True
+    except ImportError:
+        return False
+    except Exception as exc:
+        logger.warning(f"winotify notification failed: {exc}")
+        return False
+
+
+def _show_notification_winrt(title: str, message: str) -> bool:
+    if os.name != "nt":
+        return False
+    try:
+        import base64
+        app_id = WINDOWS_APP_ID.replace("'", "''")
+        ps_title = title.replace("'", "''")
+        ps_message = message.replace("'", "''")
+        script = f"""
+[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] > $null
+[Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType = WindowsRuntime] > $null
+$template = [Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent([Windows.UI.Notifications.ToastTemplateType]::ToastText02)
+$texts = $template.GetElementsByTagName("text")
+$texts.Item(0).AppendChild($template.CreateTextNode('{ps_title}')) > $null
+$texts.Item(1).AppendChild($template.CreateTextNode('{ps_message}')) > $null
+$toast = [Windows.UI.Notifications.ToastNotification]::new($template)
+$toast.Tag = 'wameed'
+$toast.Group = 'wameed'
+$notifier = [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('{app_id}')
+$notifier.Show($toast)
+"""
+        encoded = base64.b64encode(script.encode("utf-16le")).decode("ascii")
+        flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        result = subprocess.run(
+            ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-EncodedCommand", encoded],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            creationflags=flags,
+            timeout=3,
+        )
+        if result.returncode == 0:
+            logger.debug(f"🔔 WinRT notification: {title}")
+            return True
+    except Exception as exc:
+        logger.warning(f"WinRT notification failed: {exc}")
+    return False
 
 async def run_ws_server():
     async with serve(
