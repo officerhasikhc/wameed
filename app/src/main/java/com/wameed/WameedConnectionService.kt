@@ -20,6 +20,7 @@ import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import org.json.JSONObject
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.TimeUnit
 
 /**
@@ -57,6 +58,8 @@ class WameedConnectionService : Service() {
     private var pingFailures = 0
     @Volatile private var lastActivity: Long = System.currentTimeMillis()
     @Volatile private var lastReceiveActivity: Long = 0L
+    private val activeReceiveTransfers = AtomicInteger(0)
+    private var activeReceiveFilename: String = ""
     private var pcDisplay: String = ""
     // Tracks whether we've completed the one-time startup (startForeground + openWs
     // + schedulers). When Android recreates a killed service via START_STICKY, this
@@ -499,7 +502,7 @@ class WameedConnectionService : Service() {
     private fun scheduleIdleWatch() {
         handler.postDelayed({
             val idle = System.currentTimeMillis() - lastActivity
-            if (idle >= IDLE_TIMEOUT_MS) {
+            if (TransferIdlePolicy.shouldStopForIdle(idle, IDLE_TIMEOUT_MS, activeReceiveTransfers.get())) {
                 Log.i(TAG, "Idle ${idle}ms >= ${IDLE_TIMEOUT_MS}ms — auto-stop")
                 stopSelfCleanly("idle")
                 return@postDelayed
@@ -588,7 +591,11 @@ class WameedConnectionService : Service() {
                 }
 
                 override fun onFileTransferStarted(filename: String, size: Long) {
+                    activeReceiveTransfers.incrementAndGet()
+                    activeReceiveFilename = filename
+                    lastActivity = System.currentTimeMillis()
                     WameedEvents.tryEmit(WameedEvent.ReceiveMeta(filename, size))
+                    updateTransferNotification(0)
                     // Note: We do NOT open ReceiveActivity here anymore.
                     // onTransferCompleted opens it with the final URI so small files
                     // that finish before the Activity is created never get stuck.
@@ -597,9 +604,13 @@ class WameedConnectionService : Service() {
                 override fun onProgress(percent: Int, speedMbps: Double) {
                     lastActivity = System.currentTimeMillis() // Reset idle timer during active transfer
                     WameedEvents.tryEmit(WameedEvent.ReceiveProgress(percent, speedMbps))
+                    updateTransferNotification(percent)
                 }
 
                 override fun onTransferCompleted(uri: String?, filename: String, size: Long) {
+                    activeReceiveTransfers.updateAndGet { (it - 1).coerceAtLeast(0) }
+                    activeReceiveFilename = ""
+                    lastActivity = System.currentTimeMillis()
                     WameedEvents.tryEmit(WameedEvent.ReceiveComplete(uri))
 
                     // إضافة السجل للتاريخ
@@ -614,14 +625,18 @@ class WameedConnectionService : Service() {
                         addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                     }
                     startActivity(intent)
+                    ensureForeground()
                 }
 
                 override fun onError(error: String) {
                     Log.e(TAG, "Server Error: $error")
+                    activeReceiveTransfers.updateAndGet { (it - 1).coerceAtLeast(0) }
+                    activeReceiveFilename = ""
                     isReceiving = false
                     isReceiverReady = false
                     WameedEvents.tryEmit(WameedEvent.ReceiverStatus(false))
                     WameedEvents.tryEmit(WameedEvent.ReceiveError(error))
+                    ensureForeground()
                 }
 
                 override fun onPairingRequest(deviceName: String, deviceId: String) {
@@ -681,6 +696,22 @@ class WameedConnectionService : Service() {
         notificationManager.notify(NOTIF_ID, notification)
         
         Log.i(TAG, "Receiving mode started")
+    }
+
+    private fun updateTransferNotification(percent: Int) {
+        val filename = activeReceiveFilename.ifBlank { getString(R.string.label_file) }
+        val safePercent = percent.coerceIn(0, 100)
+        val text = if (safePercent > 0) {
+            "${getString(R.string.receiving_file, filename)} $safePercent%"
+        } else {
+            getString(R.string.receiving_file, filename)
+        }
+        val notification = buildNotification(
+            getString(R.string.notif_title_receiving),
+            text
+        )
+        val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        notificationManager.notify(NOTIF_ID, notification)
     }
 
     private fun stopReceivingMode() {

@@ -40,6 +40,7 @@ import requests
 import websockets
 from websockets.server import serve
 import subprocess
+from transfer_utils import SendBackpressure, TransferAckState, parse_dropped_paths
 
 try:
     import sentry_sdk
@@ -203,6 +204,11 @@ translations = {
         "selected_files": "الملفات المختارة:",
         "add_more": "+ إضافة",
         "no_files_selected": "لم يتم اختيار ملفات بعد",
+        "home_drop_title": "اسحب ملفاً هنا للإرفاق",
+        "home_drop_hint": "بعد الإرفاق اضغط إرسال فقط",
+        "home_attached_count": "{count} ملف جاهز للإرسال",
+        "home_clear_files": "مسح الملفات",
+        "history_short": "السجل",
         "no_transfers_yet": "لا توجد عمليات نقل بعد",
         "text_input_hint": "✏️ اكتب أو الصق النص هنا:",
         "paste_clipboard": "📋 لصق من الحافظة",
@@ -327,6 +333,11 @@ translations = {
         "selected_files": "Selected files:",
         "add_more": "+ Add",
         "no_files_selected": "No files selected yet",
+        "home_drop_title": "Drop a file here to attach",
+        "home_drop_hint": "After attaching, press Send only",
+        "home_attached_count": "{count} file(s) ready to send",
+        "home_clear_files": "Clear files",
+        "history_short": "History",
         "no_transfers_yet": "No transfers yet",
         "text_input_hint": "✏️ Type or paste text here:",
         "paste_clipboard": "📋 Paste from clipboard",
@@ -608,6 +619,9 @@ def install_global_exception_hooks():
 TRANSFER_PROTOCOL_VERSION = 2
 TRANSFER_CHUNK_SIZE = 512 * 1024
 TRANSFER_MAX_FRAME_SIZE = 8 * 1024 * 1024
+TRANSFER_PEER_IN_FLIGHT_LIMIT = 8 * 1024 * 1024
+TRANSFER_QUEUE_SOFT_LIMIT = 8 * 1024 * 1024
+TRANSFER_BACKPRESSURE_TIMEOUT = 120
 
 def _safe_filename(filename):
     name = os.path.basename(str(filename or "received_file")).strip()
@@ -843,6 +857,11 @@ class WameedApp:
         self.root.minsize(480, 600)
         self.root.configure(bg=T.MINT)
         self.root.protocol("WM_DELETE_WINDOW", self.hide_window)
+        self.home_selected_files = []
+        self.home_send_btn = None
+        self.home_progress_var = None
+        self.home_progress_label = None
+        self.home_send_status_frame = None
 
         self.icon_path = get_resource_path("wameed.ico")
         if os.path.exists(self.icon_path):
@@ -966,7 +985,7 @@ class WameedApp:
             idx = self.nb.index(self.nb.select())
             logger.info(f"📑 انتقال إلى تبويب: {tab_names.get(idx, idx)}")
             # تحديث البيانات عند التنقل
-            if idx == 0: self._update_status_display(); self._refresh_recent()
+            if idx == 0: self._update_status_display(); self._refresh_home_attachment_ui()
             elif idx == 1: self._build_devices()
             elif idx == 2: self._build_history()
         self.nb.bind("<<NotebookTabSelect>>", on_tab_changed)
@@ -1032,12 +1051,20 @@ class WameedApp:
         quick_frame.pack(fill="x", padx=16, pady=(0, 8))
 
         # زر الإرسال الرئيسي (بارز)
-        self._modern_button(
+        self.home_send_btn = tk.Button(
             quick_frame,
             text=t("btn_send"),
-            command=self._show_send_dialog,
-            variant="primary",
-        ).pack(fill="x", pady=(0, 6))
+            command=self._start_home_send,
+            bg=T.GREEN,
+            fg="white",
+            font=(FONT_AR, fs(12), "bold"),
+            bd=0,
+            pady=12,
+            cursor="hand2",
+            activebackground=T.GREEN_HOVER,
+            activeforeground="white",
+        )
+        self.home_send_btn.pack(fill="x", pady=(0, 6))
 
         # صف الأزرار الثانوية
         sub_btn_frame = tk.Frame(quick_frame, bg=T.SURFACE)
@@ -1068,20 +1095,177 @@ class WameedApp:
             width=120,
         ).pack(side="left", fill="x", expand=True, padx=(4, 0))
 
-        # خط فاصل
-        tk.Frame(self.tab_home, bg=T.BORDER_SOFT, height=1).pack(fill="x", padx=16, pady=6)
+        # Direct drop area on the home page.
+        self.home_drop_frame = tk.Frame(
+            self.tab_home,
+            bg=T.GREEN_95,
+            height=118,
+            highlightthickness=2,
+            highlightbackground=T.GREEN_LIGHT,
+        )
+        self.home_drop_frame.pack(fill="x", padx=16, pady=(8, 8))
+        self.home_drop_frame.pack_propagate(False)
 
-        # Recent Files — بطاقات محسّنة
-        rec_label_frame = tk.Frame(self.tab_home, bg=T.SURFACE)
-        rec_label_frame.pack(fill="x", padx=18, pady=(4, 5))
-        tk.Label(rec_label_frame, text=t("recent_files"), bg=T.SURFACE,
-                 font=(FONT_AR, fs(10), "bold"), fg=T.TEXT_SECOND).pack(side="right" if LANG=="ar" else "left")
+        drop_inner = tk.Frame(self.home_drop_frame, bg=T.GREEN_95)
+        drop_inner.pack(expand=True)
+        tk.Label(drop_inner, text="📂", font=(FONT_AR, 24), bg=T.GREEN_95, fg=T.SUCCESS).pack(
+            side="right" if LANG == "ar" else "left", padx=10
+        )
+        drop_text = tk.Frame(drop_inner, bg=T.GREEN_95)
+        drop_text.pack(side="right" if LANG == "ar" else "left")
+        self.home_drop_title = tk.Label(
+            drop_text,
+            text=t("home_drop_title"),
+            bg=T.GREEN_95,
+            font=(FONT_AR, fs(11), "bold"),
+            fg=T.GREEN_DARK,
+        )
+        self.home_drop_title.pack(anchor="e" if LANG == "ar" else "w")
+        self.home_drop_hint = tk.Label(
+            drop_text,
+            text=t("home_drop_hint"),
+            bg=T.GREEN_95,
+            font=(FONT_AR, fs(9)),
+            fg=T.GREEN,
+        )
+        self.home_drop_hint.pack(anchor="e" if LANG == "ar" else "w")
 
-        self.recent_container = tk.Frame(self.tab_home, bg=T.SURFACE)
-        self.recent_container.pack(fill="both", expand=True, padx=16)
-        self._refresh_recent()
+        self.home_attached_frame = tk.Frame(self.tab_home, bg=T.SURFACE)
+        self.home_attached_frame.pack(fill="x", padx=16, pady=(0, 8))
+        self.home_attached_label = tk.Label(
+            self.home_attached_frame,
+            text=t("no_files_selected"),
+            bg=T.SURFACE,
+            fg=T.TEXT_MUTED,
+            font=(FONT_AR, fs(9)),
+        )
+        self.home_attached_label.pack(side="right" if LANG == "ar" else "left")
+        self.home_clear_btn = self._modern_button(
+            self.home_attached_frame,
+            text=t("home_clear_files"),
+            command=self._clear_home_files,
+            variant="muted",
+            width=110,
+        )
+        self.home_clear_btn.pack(side="left" if LANG == "ar" else "right")
+
+        self.home_send_status_frame = tk.Frame(self.tab_home, bg=T.SURFACE)
+        self.home_progress_var = tk.DoubleVar(value=0)
+        ttk.Progressbar(
+            self.home_send_status_frame,
+            orient="horizontal",
+            mode="determinate",
+            variable=self.home_progress_var,
+        ).pack(fill="x", pady=(0, 4))
+        self.home_progress_label = tk.Label(
+            self.home_send_status_frame,
+            text=t("preparing"),
+            bg=T.SURFACE,
+            font=(FONT_AR, fs(9)),
+            fg=T.TEXT_MUTED,
+        )
+        self.home_progress_label.pack()
+
+        if TKDND_AVAILABLE:
+            for target in (self.root, self.tab_home, self.home_drop_frame):
+                try:
+                    target.drop_target_register(DND_FILES)
+                    target.dnd_bind("<<Drop>>", self._handle_home_drop)
+                except Exception as exc:
+                    logger.debug(f"Home drop registration skipped: {exc}")
+
+        # سجل مختصر فقط — السجل الكامل في تبويب السجل.
+        nav_frame = tk.Frame(self.tab_home, bg=T.SURFACE)
+        nav_frame.pack(fill="x", padx=16, pady=(2, 0))
+        self._modern_button(
+            nav_frame,
+            text=t("history_short"),
+            command=lambda: self.nb.select(self.tab_history),
+            variant="muted",
+            width=110,
+        ).pack(side="right" if LANG == "ar" else "left")
+
+        self._refresh_home_attachment_ui()
+
+    def _refresh_home_attachment_ui(self):
+        if not hasattr(self, "home_attached_label"):
+            return
+        count = len(self.home_selected_files)
+        if count:
+            self.home_attached_label.config(
+                text=t("home_attached_count").format(count=count),
+                fg=T.GREEN_DARK,
+            )
+            self.home_clear_btn.pack(side="left" if LANG == "ar" else "right")
+            if self.home_send_btn:
+                self.home_send_btn.config(text=t("send_now"))
+        else:
+            self.home_attached_label.config(text=t("no_files_selected"), fg=T.TEXT_MUTED)
+            try:
+                self.home_clear_btn.pack_forget()
+            except Exception:
+                pass
+            if self.home_send_btn:
+                self.home_send_btn.config(text=t("btn_send"))
+
+    def _clear_home_files(self):
+        self.home_selected_files.clear()
+        self._refresh_home_attachment_ui()
+        logger.info("Home attachments cleared")
+
+    def _add_home_files(self, paths):
+        added = 0
+        for path in paths:
+            if os.path.isfile(path) and path not in self.home_selected_files:
+                self.home_selected_files.append(path)
+                added += 1
+        if added:
+            logger.info(f"Home attachments added: {added}")
+        self._refresh_home_attachment_ui()
+
+    def _handle_home_drop(self, event):
+        paths = parse_dropped_paths(getattr(event, "data", ""))
+        self._add_home_files(paths)
+
+    def _start_home_send(self):
+        if not self.home_selected_files:
+            self._show_send_dialog()
+            return
+
+        ip = state.get("target_ip", "")
+        device_name = None
+        if connected_device:
+            ip = connected_device.get("ip", ip)
+            device_name = connected_device.get("name", "")
+
+        if not ip:
+            self._show_inline_message(self.root, t("no_device_connected_error"), T.ERROR, duration=4000)
+            return
+
+        files = list(self.home_selected_files)
+        self.progress_var = self.home_progress_var
+        self.progress_label = self.home_progress_label
+        self.home_send_status_frame.pack(fill="x", padx=16, pady=(0, 8))
+        self.home_progress_var.set(0)
+        self.home_progress_label.config(text=t("preparing"))
+        self.home_send_btn.config(state="disabled", text=t("sending_progress"), bg=T.GREEN_LIGHT, cursor="watch")
+
+        def on_success():
+            self.home_selected_files.clear()
+            self._refresh_home_attachment_ui()
+            self.home_send_status_frame.pack_forget()
+            self.home_send_btn.config(state="normal", text=t("btn_send"), bg=T.GREEN, cursor="hand2")
+
+        threading.Thread(
+            target=self._execute_multi_send,
+            args=(ip, files, self.root, self.home_send_btn, device_name),
+            kwargs={"on_success": on_success, "button_text": t("send_now")},
+            daemon=True,
+        ).start()
 
     def _refresh_recent(self):
+        if not hasattr(self, "recent_container"):
+            return
         for w in self.recent_container.winfo_children(): w.destroy()
         recent = state["history"][-5:]
         if not recent:
@@ -3153,11 +3337,7 @@ if ($LaunchExe) {{
     def _handle_multi_drop(self, event, callback):
         """معالجة إفلات ملفات متعددة"""
         try:
-            data = event.data
-            # تنظيف مسارات ويندوز التي تحتوي على مسافات وتوضع بين {}
-            import re
-            paths = re.findall(r'\{(.*?)\}|(\S+)', data)
-            cleaned_paths = [p[0] if p[0] else p[1] for p in paths]
+            cleaned_paths = parse_dropped_paths(getattr(event, "data", ""))
 
             logger.info(f"تم استقبال {len(cleaned_paths)} ملفات عبر السحب والإفلات")
             for p in cleaned_paths:
@@ -3167,7 +3347,7 @@ if ($LaunchExe) {{
         except Exception as e:
             logger.error(f"Multi-drop error: {e}")
 
-    def _show_inline_message(self, window, message, color=T.GREEN, duration=2500):
+    def _show_inline_message(self, window, message, color=T.GREEN, duration=2500, close_on_success=True):
         """عرض رسالة تنبيه داخلية بدلاً من messagebox"""
         msg_label = tk.Label(window, text=message, bg=color, fg="white", font=(FONT_AR, fs(10), "bold"), pady=10)
         msg_label.pack(fill="x", side="bottom")
@@ -3176,13 +3356,13 @@ if ($LaunchExe) {{
         def remove():
             try:
                 msg_label.destroy()
-                if color == T.GREEN: # إذا كان نجاح، نغلق النافذة بالكامل
+                if color == T.GREEN and close_on_success and window is not self.root: # إذا كان نجاح، نغلق النافذة بالكامل
                     window.destroy()
             except: pass
 
         window.after(duration, remove)
 
-    def _execute_multi_send(self, ip, files, window, btn, device_name=None):
+    def _execute_multi_send(self, ip, files, window, btn, device_name=None, on_success=None, button_text=None):
         """إرسال مجموعة ملفات مع تحديث واجهة المستخدم"""
         logger.info(f"بدء إرسال {len(files)} ملفات إلى الهاتف ({ip})")
         async def task():
@@ -3221,117 +3401,207 @@ if ($LaunchExe) {{
                                 window.after(0, lambda: self._show_inline_message(window, "❌ تم رفض الاتصال من الهاتف", "#EF4444"))
                                 return
 
-                            total_files = len(files)
-                            for idx, path in enumerate(files):
-                                fname = os.path.basename(path)
-                                fsize = os.path.getsize(path)
-                                logger.info(f"جاري إرسال ({idx+1}/{total_files}): {fname}")
-                                start_time = time.time()
+                            status_queue = asyncio.Queue()
+                            reader_error = {"error": None}
 
-                                window.after(0, lambda i=idx, n=fname: self.progress_label.config(text=t("sending_file").format(idx=i+1, total=total_files, name=n)))
-
-                                chunk_size = TRANSFER_CHUNK_SIZE
-                                total_chunks = (fsize + chunk_size - 1) // chunk_size
-                                transfer_id = _transfer_id_for_file(path, fsize)
-
-                                await ws.send(json.dumps({
-                                    "type": "file_meta",
-                                    "protocol_version": TRANSFER_PROTOCOL_VERSION,
-                                    "transfer_id": transfer_id,
-                                    "direction": "windows_to_android",
-                                    "filename": fname,
-                                    "size": fsize,
-                                    "chunks": total_chunks,
-                                    "chunk_size": chunk_size,
-                                }))
-
-                                resume_offset = 0
-                                pending_status = None
+                            async def read_statuses():
                                 try:
-                                    ready_raw = await asyncio.wait_for(ws.recv(), timeout=5)
-                                    ready = json.loads(ready_raw)
-                                    if ready.get("status") == "ready":
-                                        resume_offset = max(0, min(int(ready.get("offset", 0)), fsize))
-                                        logger.info(f"الهاتف جاهز لاستقبال {fname}; resume_offset={resume_offset}")
-                                    elif ready.get("status") == "error":
-                                        raise Exception(ready.get("message", "رفض الهاتف استقبال الملف"))
-                                    else:
-                                        pending_status = ready
-                                except asyncio.TimeoutError:
-                                    logger.info("لم يصل ready من الهاتف؛ المتابعة بتوافق البروتوكول القديم")
+                                    while True:
+                                        incoming = await ws.recv()
+                                        if isinstance(incoming, str):
+                                            try:
+                                                await status_queue.put(json.loads(incoming))
+                                            except json.JSONDecodeError:
+                                                logger.debug(f"تجاهل ACK غير صالح من الهاتف: {incoming[:120]}")
+                                except asyncio.CancelledError:
+                                    raise
+                                except Exception as exc:
+                                    reader_error["error"] = exc
 
-                                sent = resume_offset
-                                with open(path, "rb") as f:
-                                    if resume_offset:
-                                        f.seek(resume_offset)
-                                    while sent < fsize:
-                                        chunk = f.read(chunk_size)
-                                        if not chunk:
+                            async def next_status(timeout):
+                                try:
+                                    return await asyncio.wait_for(status_queue.get(), timeout=timeout)
+                                except asyncio.TimeoutError:
+                                    return None
+
+                            reader_task = asyncio.create_task(read_statuses())
+                            try:
+                                total_files = len(files)
+                                pressure = SendBackpressure(
+                                    queue_soft_limit=TRANSFER_QUEUE_SOFT_LIMIT,
+                                    peer_in_flight_limit=TRANSFER_PEER_IN_FLIGHT_LIMIT,
+                                )
+
+                                for idx, path in enumerate(files):
+                                    fname = os.path.basename(path)
+                                    fsize = os.path.getsize(path)
+                                    logger.info(f"جاري إرسال ({idx+1}/{total_files}): {fname}")
+                                    start_time = time.time()
+
+                                    window.after(0, lambda i=idx, n=fname: self.progress_label.config(text=t("sending_file").format(idx=i+1, total=total_files, name=n)))
+                                    window.after(0, lambda: self.progress_var.set(0))
+
+                                    chunk_size = TRANSFER_CHUNK_SIZE
+                                    total_chunks = (fsize + chunk_size - 1) // chunk_size
+                                    transfer_id = _transfer_id_for_file(path, fsize)
+                                    ack_state = TransferAckState(total_bytes=fsize, total_chunks=total_chunks)
+
+                                    def apply_transfer_status(status_msg):
+                                        ack_state.apply_message(status_msg)
+                                        status = ack_state.status
+                                        if status == "failed":
+                                            raise Exception(ack_state.message or "خطأ غير معروف في الهاتف")
+                                        if status == "saving":
+                                            logger.info(f"الهاتف يقوم بحفظ الملف {fname}...")
+                                            window.after(0, lambda n=fname: self.progress_label.config(text=t("saving_file").format(name=n)))
+                                        if status in {"ready", "progress", "saving", "saved"}:
+                                            pct = 100 if status == "saved" else min(99.0, ack_state.progress_percent)
+                                            window.after(0, lambda p=pct: self.progress_var.set(p))
+
+                                    async def drain_statuses():
+                                        while True:
+                                            try:
+                                                status_msg = status_queue.get_nowait()
+                                            except asyncio.QueueEmpty:
+                                                break
+                                            apply_transfer_status(status_msg)
+
+                                    async def wait_for_send_window(sent_bytes, chunk_bytes):
+                                        started = time.time()
+                                        sleep_seconds = 0.01
+                                        while not pressure.can_send(
+                                            queue_size=0,
+                                            chunk_size=chunk_bytes,
+                                            sent_bytes=sent_bytes,
+                                            peer_received_bytes=ack_state.received_bytes,
+                                        ):
+                                            await drain_statuses()
+                                            if pressure.can_send(
+                                                queue_size=0,
+                                                chunk_size=chunk_bytes,
+                                                sent_bytes=sent_bytes,
+                                                peer_received_bytes=ack_state.received_bytes,
+                                            ):
+                                                return
+                                            if time.time() - started > TRANSFER_BACKPRESSURE_TIMEOUT:
+                                                raise TimeoutError(f"Timeout waiting for phone receive buffer for {fname}")
+                                            status_msg = await next_status(min(0.25, sleep_seconds))
+                                            if status_msg is not None:
+                                                apply_transfer_status(status_msg)
+                                            else:
+                                                await asyncio.sleep(sleep_seconds)
+                                            sleep_seconds = min(0.25, sleep_seconds * 2)
+
+                                    await ws.send(json.dumps({
+                                        "type": "file_meta",
+                                        "protocol_version": TRANSFER_PROTOCOL_VERSION,
+                                        "transfer_id": transfer_id,
+                                        "direction": "windows_to_android",
+                                        "filename": fname,
+                                        "size": fsize,
+                                        "chunks": total_chunks,
+                                        "chunk_size": chunk_size,
+                                    }))
+
+                                    resume_offset = 0
+                                    ready_deadline = time.time() + 5
+                                    while time.time() < ready_deadline:
+                                        status_msg = await next_status(max(0.05, ready_deadline - time.time()))
+                                        if status_msg is None:
                                             break
-                                        await ws.send(chunk)
-                                        sent += len(chunk)
-                                        pct = (sent / fsize) * 100 if fsize else 100
-                                        window.after(0, lambda p=pct: self.progress_var.set(p))
-                                        if sent % (16 * 1024 * 1024) < chunk_size:
+                                        status = status_msg.get("status")
+                                        apply_transfer_status(status_msg)
+                                        if status == "ready":
+                                            resume_offset = max(0, min(int(status_msg.get("offset", 0) or 0), fsize))
+                                            ack_state.received_bytes = max(ack_state.received_bytes, resume_offset)
+                                            logger.info(f"الهاتف جاهز لاستقبال {fname}; resume_offset={resume_offset}")
+                                            break
+                                        if status in {"progress", "saving", "saved"}:
+                                            break
+
+                                    if resume_offset == 0 and ack_state.status != "ready":
+                                        logger.info("لم يصل ready من الهاتف؛ المتابعة بتوافق البروتوكول القديم")
+
+                                    sent = resume_offset
+                                    last_calc_time = time.time()
+                                    last_calc_received = resume_offset
+                                    with open(path, "rb") as f:
+                                        if resume_offset:
+                                            f.seek(resume_offset)
+                                        while sent < fsize:
+                                            await drain_statuses()
+                                            chunk = f.read(chunk_size)
+                                            if not chunk:
+                                                break
+                                            await wait_for_send_window(sent, len(chunk))
+                                            await ws.send(chunk)
+                                            sent += len(chunk)
+
+                                            now = time.time()
+                                            if now - last_calc_time >= 0.5:
+                                                delta_seconds = max(0.001, now - last_calc_time)
+                                                delta_bytes = max(0, ack_state.received_bytes - last_calc_received)
+                                                speed_mbps = (delta_bytes * 8.0) / (1024.0 * 1024.0 * delta_seconds)
+                                                if speed_mbps > 0:
+                                                    pct = min(99.0, ack_state.progress_percent)
+                                                    window.after(0, lambda p=pct: self.progress_var.set(p))
+                                                last_calc_time = now
+                                                last_calc_received = ack_state.received_bytes
                                             await asyncio.sleep(0)
 
-                                ack_timeout = _ack_timeout_for_size(fsize)
-                                ack_started = time.time()
-                                last_status = time.time()
-                                saved = False
-                                final_resp = pending_status
+                                    ack_timeout = _ack_timeout_for_size(fsize)
+                                    ack_started = time.time()
+                                    last_status = time.time()
+                                    saved = False
+                                    window.after(0, lambda n=fname: self.progress_label.config(text=t("saving_file").format(name=n)))
 
-                                while time.time() - ack_started < ack_timeout:
-                                    if final_resp is None:
-                                        try:
-                                            final_resp_raw = await asyncio.wait_for(ws.recv(), timeout=30)
-                                            final_resp = json.loads(final_resp_raw)
-                                        except asyncio.TimeoutError:
+                                    while time.time() - ack_started < ack_timeout:
+                                        status_msg = await next_status(30)
+                                        if status_msg is None:
+                                            if reader_error["error"] is not None:
+                                                raise reader_error["error"]
                                             if time.time() - last_status > min(180, ack_timeout):
                                                 raise TimeoutError(f"Timeout waiting for save ACK for {fname}")
                                             continue
 
-                                    status = final_resp.get("status")
-                                    if status == "progress":
-                                        received = int(final_resp.get("received_bytes", final_resp.get("received", sent)) or 0)
-                                        if fsize:
-                                            pct = min(100, (received / fsize) * 100)
-                                            window.after(0, lambda p=pct: self.progress_var.set(p))
+                                        apply_transfer_status(status_msg)
                                         last_status = time.time()
-                                    elif status == "saving":
-                                        logger.info(f"الهاتف يقوم بحفظ الملف {fname}...")
-                                        window.after(0, lambda n=fname: self.progress_label.config(text=t("saving_file").format(name=n)))
-                                        last_status = time.time()
-                                    elif status == "saved":
-                                        saved = True
-                                        break
-                                    elif status == "error":
-                                        raise Exception(final_resp.get("message", "خطأ غير معروف في الهاتف"))
+                                        if ack_state.status == "saved":
+                                            saved = True
+                                            break
 
-                                    final_resp = None
+                                    if not saved:
+                                        raise TimeoutError(f"Timeout waiting for 'saved' status for {fname}")
 
-                                if not saved:
-                                    raise TimeoutError(f"Timeout waiting for 'saved' status for {fname}")
+                                    elapsed = time.time() - start_time
+                                    logger.info(f"تم إرسال {fname} بنجاح في {elapsed:.2f} ثانية")
 
-                                elapsed = time.time() - start_time
-                                logger.info(f"تم إرسال {fname} بنجاح")
+                                    # إضافة للملفات المرسلة في السجل (تم إصلاح تمرير اسم الجهاز)
+                                    d_name = device_name if device_name else ip
+                                    self.root.after(0, lambda n=fname, p=path, dn=d_name: self.add_to_history(n, p, device_name=dn, direction="sent"))
 
-                                # إضافة للملفات المرسلة في السجل (تم إصلاح تمرير اسم الجهاز)
+                                logger.info(f"اكتمل إرسال جميع الملفات ({total_files}) بنجاح.")
+                                # تحديث حالة الاتصال بعد الإرسال الناجح
                                 d_name = device_name if device_name else ip
-                                self.root.after(0, lambda n=fname, p=path, dn=d_name: self.add_to_history(n, p, device_name=dn, direction="sent"))
-
-                            logger.info(f"اكتمل إرسال جميع الملفات ({total_files}) بنجاح.")
-                            # تحديث حالة الاتصال بعد الإرسال الناجح
-                            d_name = device_name if device_name else ip
-                            device_info = {
-                                "id": connected_device.get("id", "") if connected_device else "",
-                                "name": d_name,
-                                "ip": ip,
-                                "connected_at": datetime.now()
-                            }
-                            self.root.after(0, lambda: self._set_connection_state("connected", device_info))
-                            window.after(0, lambda: self._show_inline_message(window, f"✅ تم إرسال {total_files} ملفات بنجاح"))
-                            return # نجاح، اخرج من حلقة المحاولات
+                                device_info = {
+                                    "id": connected_device.get("id", "") if connected_device else "",
+                                    "name": d_name,
+                                    "ip": ip,
+                                    "connected_at": datetime.now()
+                                }
+                                self.root.after(0, lambda: self._set_connection_state("connected", device_info))
+                                window.after(0, lambda: self._show_inline_message(window, f"✅ تم إرسال {total_files} ملفات بنجاح"))
+                                if on_success:
+                                    window.after(0, on_success)
+                                return # نجاح، اخرج من حلقة المحاولات
+                            finally:
+                                reader_task.cancel()
+                                try:
+                                    await reader_task
+                                except asyncio.CancelledError:
+                                    pass
+                                except Exception:
+                                    pass
 
                     except (ConnectionRefusedError, OSError) as e:
                         if attempt < max_retries - 1:
@@ -3364,7 +3634,7 @@ if ($LaunchExe) {{
                 else: error_msg = f"فشل الإرسال: {error_msg[:80]}"
 
                 window.after(0, lambda m=error_msg: self._show_inline_message(window, f"❌ {m}", "#EF4444"))
-                window.after(0, lambda: btn.config(state="normal", text=t("send_now"), bg=T.GREEN))
+                window.after(0, lambda: btn.config(state="normal", text=button_text or t("send_now"), bg=T.GREEN, cursor="hand2"))
 
         asyncio.run(task())
 

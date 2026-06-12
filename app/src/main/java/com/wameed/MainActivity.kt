@@ -673,11 +673,27 @@ fun MainScreen(sender: WameedSender, discovery: DeviceDiscovery, updateManager: 
                         fontSize = 22.sp
                     )
                 },
+                actions = {
+                    IconButton(onClick = { selectedTab = 1 }) {
+                        Icon(
+                            Icons.AutoMirrored.Filled.List,
+                            contentDescription = stringResource(R.string.tab_history),
+                            tint = if (selectedTab == 1) WameedGreen else WameedTextSecondary
+                        )
+                    }
+                    IconButton(onClick = { selectedTab = 3 }) {
+                        Icon(
+                            Icons.Default.Settings,
+                            contentDescription = stringResource(R.string.tab_settings),
+                            tint = if (selectedTab == 3) WameedGreen else WameedTextSecondary
+                        )
+                    }
+                },
                 colors = TopAppBarDefaults.centerAlignedTopAppBarColors(containerColor = WameedMint)
             )
         },
         bottomBar = {
-            if (selectedTab in 0..3) {
+            if (selectedTab == 0 || selectedTab == 2) {
                 WameedBottomBar(
                     selectedTab = selectedTab,
                     onSelect = { tab ->
@@ -834,9 +850,7 @@ private fun WameedBottomBar(
 ) {
     val tabs = listOf(
         0 to stringResource(R.string.tab_home),
-        1 to stringResource(R.string.tab_history),
-        2 to stringResource(R.string.tab_received),
-        3 to stringResource(R.string.tab_settings)
+        2 to stringResource(R.string.tab_received)
     )
 
     Surface(
