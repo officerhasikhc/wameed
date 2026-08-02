@@ -181,6 +181,14 @@ class WameedSender(private val context: Context) {
         fun onInfo(message: String) {}
         /** Called when starting to send a new file in a batch. */
         fun onNextFile(index: Int, total: Int, fileName: String) {}
+        /**
+         * Same as [onError], but also classifies whether the failure is worth silently
+         * retrying (PC app not open yet, connection dropped) vs. terminal (explicit
+         * pairing rejection, device never configured). Defaults to [onError] so every
+         * existing implementer is unaffected; only [verifySendReady] callers that care
+         * about retry behavior need to override this one instead.
+         */
+        fun onError(error: String, retryable: Boolean) { onError(error) }
     }
 
     /** Record a successful send so MainActivity can show "متصل" even without
@@ -306,7 +314,7 @@ class WameedSender(private val context: Context) {
     fun verifySendReady(callback: SendCallback) {
         val ip = WameedPrefs.getPcIp(context)
         if (ip.isEmpty()) {
-            callback.onError(context.getString(R.string.error_pc_not_configured))
+            callback.onError(context.getString(R.string.error_pc_not_configured), false)
             return
         }
 
@@ -321,7 +329,7 @@ class WameedSender(private val context: Context) {
                 while (!finishedFlag.get()) {
                     if (System.currentTimeMillis() - lastProgressMs.get() > timeoutMs) {
                         if (finishedFlag.compareAndSet(false, true)) {
-                            callback.onError(context.getString(R.string.error_timeout_pc_no_response))
+                            callback.onError(context.getString(R.string.error_timeout_pc_no_response), true)
                         }
                         break
                     }
@@ -359,7 +367,8 @@ class WameedSender(private val context: Context) {
                     "rejected" -> {
                         if (finishedFlag.compareAndSet(false, true)) {
                             callback.onError(
-                                resp.optString("message", context.getString(R.string.error_pairing_rejected))
+                                resp.optString("message", context.getString(R.string.error_pairing_rejected)),
+                                false
                             )
                             try { webSocket.close(1000, null) } catch (_: Exception) {}
                         }
@@ -367,7 +376,8 @@ class WameedSender(private val context: Context) {
                     "error" -> {
                         if (finishedFlag.compareAndSet(false, true)) {
                             callback.onError(
-                                resp.optString("message", context.getString(R.string.send_not_ready_to_pc))
+                                resp.optString("message", context.getString(R.string.send_not_ready_to_pc)),
+                                true
                             )
                             try { webSocket.close(1000, null) } catch (_: Exception) {}
                         }
@@ -382,14 +392,14 @@ class WameedSender(private val context: Context) {
                         t is java.net.SocketTimeoutException -> context.getString(R.string.error_socket_timeout)
                         else -> context.getString(R.string.error_connection_dropped, t.message ?: "")
                     }
-                    callback.onError(msg)
+                    callback.onError(msg, true)
                 }
             }
 
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
                 if (!finishedFlag.get() && code != 1000) {
                     if (finishedFlag.compareAndSet(false, true)) {
-                        callback.onError(context.getString(R.string.error_connect_failed))
+                        callback.onError(context.getString(R.string.error_connect_failed), true)
                     }
                 }
             }

@@ -197,6 +197,8 @@ translations = {
         "select_device": "اختر جهازاً للاتصال",
         "no_devices_found": "لم يتم العثور على أجهزة 📵",
         "manual_connect": "🔗 اتصال يدوي",
+        "icon_search_caption": "بحث",
+        "icon_manual_connect_caption": "اتصال يدوي",
         "manual_connect_title": "🔗 أدخل عنوان IP الهاتف",
         "manual_connect_btn": "✓ اتصال",
         "manual_connect_warn": "أدخل عنوان IP صالح",
@@ -326,6 +328,8 @@ translations = {
         "select_device": "Select a device to connect",
         "no_devices_found": "No devices found 📵",
         "manual_connect": "🔗 Manual Connect",
+        "icon_search_caption": "Search",
+        "icon_manual_connect_caption": "Manual",
         "manual_connect_title": "🔗 Enter phone IP address",
         "manual_connect_btn": "✓ Connect",
         "manual_connect_warn": "Enter a valid IP address",
@@ -646,6 +650,12 @@ def _ack_timeout_for_size(size_bytes):
     # Finalization on mobile storage can be slow; keep this bounded but size-aware.
     return max(180, min(3600, int(size_bytes / (2 * 1024 * 1024)) + 120))
 
+def _backpressure_timeout_for_size(size_bytes):
+    # Mirrors _ack_timeout_for_size: a flat 120s ceiling aborts large/high-quality
+    # video sends whenever the phone's storage write briefly falls behind. Scale it
+    # with file size so big clips get room without letting a truly dead peer hang.
+    return max(TRANSFER_BACKPRESSURE_TIMEOUT, min(1800, int(size_bytes / (2 * 1024 * 1024)) + 90))
+
 async def _send_transfer_status(websocket, status, **fields):
     payload = {
         "status": status,
@@ -720,6 +730,7 @@ _health_check_failures = 0  # عدد فشل فحص TCP المتتالي
 _folder_reveal_lock = threading.Lock()
 _folder_reveal_timers = {}
 _FOLDER_REVEAL_DELAY_SECONDS = 0.35
+_ICON_CACHE = {}  # (name, size, color) -> ImageTk.PhotoImage, see WameedApp._load_icon
 
 def load_config():
     if os.path.exists(CONFIG_FILE):
@@ -853,8 +864,8 @@ class WameedApp:
             self.root = tk.Tk()
 
         self.root.title(APP_NAME)
-        self.root.geometry("520x680")
-        self.root.minsize(480, 600)
+        self.root.geometry("520x760")
+        self.root.minsize(480, 640)
         self.root.configure(bg=T.MINT)
         self.root.protocol("WM_DELETE_WINDOW", self.hide_window)
         self.home_selected_files = []
@@ -872,6 +883,47 @@ class WameedApp:
 
         self.setup_ui()
         self.setup_tray()
+
+    def _load_icon(self, name, size=18, color=T.TEXT_SECOND):
+        """Load and tint one of the small monochrome PNGs in icons/ (see icons/gen_icons
+        for the source glyphs). Recolors via the glyph's own alpha channel so a single
+        black-on-transparent asset works for every button state/theme color."""
+        key = (name, size, color)
+        cached = _ICON_CACHE.get(key)
+        if cached is not None:
+            return cached
+        path = get_resource_path(os.path.join("icons", f"{name}.png"))
+        if not os.path.exists(path):
+            logger.debug(f"Icon asset missing: {path}")
+            return None
+        glyph = Image.open(path).convert("RGBA").resize((size, size), Image.LANCZOS)
+        solid = Image.new("RGBA", glyph.size, color)
+        solid.putalpha(glyph.getchannel("A"))
+        tk_img = ImageTk.PhotoImage(solid)
+        _ICON_CACHE[key] = tk_img
+        return tk_img
+
+    def _icon_button(self, master, icon_name, caption, command, size=20):
+        """Small icon-over-caption button for the top toolbar (search/manual-connect/history)."""
+        icon = self._load_icon(icon_name, size=size)
+        btn = tk.Button(
+            master,
+            image=icon,
+            text=caption,
+            compound="top",
+            command=command,
+            bg=T.SURFACE,
+            activebackground=T.GREEN_95,
+            fg=T.TEXT_SECOND,
+            font=(FONT_AR, fs(8)),
+            bd=0,
+            relief="flat",
+            cursor="hand2",
+            padx=10,
+            pady=4,
+        )
+        btn.image = icon  # keep a reference alive — tk.Button doesn't retain PhotoImage refs
+        return btn
 
     def _modern_button(self, master, text, command=None, variant="primary", width=None, **kwargs):
         palette = {
@@ -950,6 +1002,23 @@ class WameedApp:
             fg=T.GREEN,
             font=(FONT_AR, fs(22), "bold")
         ).pack(padx=5)
+
+        # --- Top icon bar: search devices / manual connect / history — kept out of
+        # the primary send flow so the Home tab stays focused on drop-zone + Send.
+        top_icon_bar = tk.Frame(self.root, bg=T.SURFACE, height=54)
+        top_icon_bar.pack(fill="x", padx=14, pady=(2, 0))
+        top_icon_bar.pack_propagate(False)
+        icon_row = tk.Frame(top_icon_bar, bg=T.SURFACE)
+        icon_row.pack(side="right" if LANG == "ar" else "left")
+        self._icon_button(
+            icon_row, "search", t("icon_search_caption"), self._show_discovery_dialog
+        ).pack(side="left", padx=(0, 4))
+        self._icon_button(
+            icon_row, "link", t("icon_manual_connect_caption"), self._show_manual_ip_dialog
+        ).pack(side="left", padx=4)
+        self._icon_button(
+            icon_row, "history", t("history_short"), lambda: self.nb.select(self.tab_history)
+        ).pack(side="left", padx=4)
 
         # --- Style ---
         style = ttk.Style()
@@ -1066,26 +1135,10 @@ class WameedApp:
         )
         self.home_send_btn.pack(fill="x", pady=(0, 6))
 
-        # صف الأزرار الثانوية
+        # صف الإجراء الثانوي — البحث عن الأجهزة والاتصال اليدوي انتقلا لشريط الأيقونات
+        # العلوي (top_icon_bar) حتى تبقى هذه المنطقة مخصصة للإرسال فقط.
         sub_btn_frame = tk.Frame(quick_frame, bg=T.SURFACE)
         sub_btn_frame.pack(fill="x")
-
-        search_btn = self._modern_button(
-            sub_btn_frame,
-            text=t("btn_search_devices"),
-            command=self._show_discovery_dialog,
-            variant="secondary",
-            width=120,
-        )
-        search_btn.pack(side="left", fill="x", expand=True, padx=(0, 4))
-
-        self._modern_button(
-            sub_btn_frame,
-            text=t("manual_connect"),
-            command=self._show_manual_ip_dialog,
-            variant="secondary",
-            width=120,
-        ).pack(side="left", fill="x", expand=True, padx=(4, 4))
 
         self._modern_button(
             sub_btn_frame,
@@ -1093,31 +1146,32 @@ class WameedApp:
             command=lambda: os.startfile(state["save_dir"]),
             variant="muted",
             width=120,
-        ).pack(side="left", fill="x", expand=True, padx=(4, 0))
+        ).pack(side="left", fill="x", expand=True)
 
-        # Direct drop area on the home page.
+        # Direct drop area on the home page — the single surface for attaching files,
+        # whether by dragging them in or clicking to browse. Sized generously so the
+        # send section feels spacious rather than a thin strip above the button.
         self.home_drop_frame = tk.Frame(
             self.tab_home,
             bg=T.GREEN_95,
-            height=118,
+            height=180,
             highlightthickness=2,
             highlightbackground=T.GREEN_LIGHT,
         )
-        self.home_drop_frame.pack(fill="x", padx=16, pady=(8, 8))
+        self.home_drop_frame.pack(fill="x", padx=16, pady=(14, 14))
         self.home_drop_frame.pack_propagate(False)
 
         drop_inner = tk.Frame(self.home_drop_frame, bg=T.GREEN_95)
         drop_inner.pack(expand=True)
-        tk.Label(drop_inner, text="📂", font=(FONT_AR, 24), bg=T.GREEN_95, fg=T.SUCCESS).pack(
-            side="right" if LANG == "ar" else "left", padx=10
-        )
+        drop_icon = tk.Label(drop_inner, text="📂", font=(FONT_AR, 32), bg=T.GREEN_95, fg=T.SUCCESS)
+        drop_icon.pack(side="right" if LANG == "ar" else "left", padx=14)
         drop_text = tk.Frame(drop_inner, bg=T.GREEN_95)
         drop_text.pack(side="right" if LANG == "ar" else "left")
         self.home_drop_title = tk.Label(
             drop_text,
             text=t("home_drop_title"),
             bg=T.GREEN_95,
-            font=(FONT_AR, fs(11), "bold"),
+            font=(FONT_AR, fs(12), "bold"),
             fg=T.GREEN_DARK,
         )
         self.home_drop_title.pack(anchor="e" if LANG == "ar" else "w")
@@ -1125,10 +1179,21 @@ class WameedApp:
             drop_text,
             text=t("home_drop_hint"),
             bg=T.GREEN_95,
-            font=(FONT_AR, fs(9)),
+            font=(FONT_AR, fs(10)),
             fg=T.GREEN,
         )
         self.home_drop_hint.pack(anchor="e" if LANG == "ar" else "w")
+
+        # Click anywhere on the drop zone to browse — no separate "send" window needed,
+        # drag-and-drop and click-to-browse both feed the same home_selected_files state.
+        def _open_home_file_picker(event=None):
+            paths = filedialog.askopenfilenames()
+            if paths:
+                self._add_home_files(paths)
+
+        for clickable in (self.home_drop_frame, drop_inner, drop_icon, self.home_drop_title, self.home_drop_hint):
+            clickable.bind("<Button-1>", _open_home_file_picker)
+            clickable.config(cursor="hand2")
 
         self.home_attached_frame = tk.Frame(self.tab_home, bg=T.SURFACE)
         self.home_attached_frame.pack(fill="x", padx=16, pady=(0, 8))
@@ -1174,18 +1239,95 @@ class WameedApp:
                 except Exception as exc:
                     logger.debug(f"Home drop registration skipped: {exc}")
 
-        # سجل مختصر فقط — السجل الكامل في تبويب السجل.
+        # زر إرسال نص/رابط فقط — السجل أصبح في شريط الأيقونات العلوي.
         nav_frame = tk.Frame(self.tab_home, bg=T.SURFACE)
         nav_frame.pack(fill="x", padx=16, pady=(2, 0))
         self._modern_button(
             nav_frame,
-            text=t("history_short"),
-            command=lambda: self.nb.select(self.tab_history),
+            text=t("tab_text"),
+            command=self._toggle_home_text_panel,
             variant="muted",
             width=110,
         ).pack(side="right" if LANG == "ar" else "left")
 
+        # لوحة إرسال نص/رابط — مطوية افتراضياً، بدون نافذة منفصلة.
+        self.home_text_frame = tk.Frame(self.tab_home, bg=T.SURFACE)
+        tk.Label(
+            self.home_text_frame,
+            text=t("text_input_hint"),
+            bg=T.SURFACE,
+            font=(FONT_AR, fs(9), "bold"),
+            fg=T.TEXT_SECOND,
+        ).pack(anchor="e" if LANG == "ar" else "w", padx=16, pady=(8, 4))
+
+        text_box_frame = tk.Frame(self.home_text_frame, bg=T.SURFACE_DIM,
+                                   highlightthickness=1, highlightbackground=T.BORDER_SOFT)
+        text_box_frame.pack(fill="x", padx=16)
+        self.home_text_area = tk.Text(
+            text_box_frame, height=3, font=(FONT_AR, fs(10)), wrap="word",
+            bd=0, relief="flat", padx=10, pady=8,
+            bg=T.SURFACE_DIM, fg=T.TEXT, insertbackground=T.GREEN,
+            undo=True, highlightthickness=0,
+        )
+        self.home_text_area.pack(fill="x")
+
+        text_tools = tk.Frame(self.home_text_frame, bg=T.SURFACE)
+        text_tools.pack(fill="x", padx=16, pady=(6, 12))
+
+        def _paste_home_text():
+            try:
+                content = self.root.clipboard_get()
+                self.home_text_area.insert(tk.INSERT, content)
+            except Exception:
+                pass
+
+        def _clear_home_text():
+            self.home_text_area.delete("1.0", "end")
+
+        self._modern_button(text_tools, text=t("paste_clipboard"), command=_paste_home_text,
+                            variant="muted", width=120).pack(side="right" if LANG == "ar" else "left")
+        self._modern_button(text_tools, text=t("clear_all"), command=_clear_home_text,
+                            variant="danger", width=100).pack(
+            side="right" if LANG == "ar" else "left", padx=8)
+        self._modern_button(text_tools, text=t("send_now"), command=self._send_home_text,
+                            variant="primary", width=120).pack(side="left" if LANG == "ar" else "right")
+
         self._refresh_home_attachment_ui()
+
+    def _toggle_home_text_panel(self):
+        if self.home_text_frame.winfo_ismapped():
+            self.home_text_frame.pack_forget()
+        else:
+            self.home_text_frame.pack(fill="x")
+
+    def _send_home_text(self):
+        txt = self.home_text_area.get("1.0", "end").strip()
+        if not txt:
+            self._show_inline_message(self.root, t("enter_text_first"), T.ERROR, duration=3000)
+            return
+
+        ip = state.get("target_ip", "")
+        device_name = None
+        if connected_device:
+            ip = connected_device.get("ip", ip)
+            device_name = connected_device.get("name", "")
+
+        if not ip:
+            self._show_inline_message(self.root, t("no_device_connected_error"), T.ERROR, duration=4000)
+            return
+
+        self.progress_var = self.home_progress_var
+        self.progress_label = self.home_progress_label
+        self.home_send_status_frame.pack(fill="x", padx=16, pady=(0, 8))
+        self.home_progress_var.set(0)
+        self.home_progress_label.config(text=t("preparing"))
+
+        threading.Thread(
+            target=self._execute_send_text,
+            args=(ip, txt, self.root, self.home_progress_var, device_name),
+            daemon=True,
+        ).start()
+        self.home_text_area.delete("1.0", "end")
 
     def _refresh_home_attachment_ui(self):
         if not hasattr(self, "home_attached_label"):
@@ -1229,7 +1371,7 @@ class WameedApp:
 
     def _start_home_send(self):
         if not self.home_selected_files:
-            self._show_send_dialog()
+            self._show_inline_message(self.root, t("select_file_first"), T.ERROR, duration=3000)
             return
 
         ip = state.get("target_ip", "")
@@ -1617,7 +1759,7 @@ class WameedApp:
                                 self.root.after(0, lambda: self.update_device_history(device.get("id", ""), name))
 
                                 dialog.destroy()
-                                self._show_send_dialog(device_ip=ip, device_name=name)
+                                self.nb.select(self.tab_home)
                             else:
                                 logger.warning(f"⚠️ {name} ({ip}) discovered but WebSocket is not ready: {reason}")
                                 self._set_connection_state("discovered", device_info)
@@ -1966,7 +2108,7 @@ class WameedApp:
                 }
                 self._set_connection_state("connected", device_info)
                 self._build_devices()
-                self._show_send_dialog(device_ip=ip, device_name=device_name)
+                self.nb.select(self.tab_home)
             else:
                 device_info = {"id": device_id, "name": device_name, "ip": ip}
                 self._set_connection_state("discovered", device_info)
@@ -1976,7 +2118,7 @@ class WameedApp:
             messagebox.showwarning("تنبيه", f"لم يتم العثور على الجهاز '{device_name}' في الشبكة\nتأكد من أن التطبيق مفتوح على الهاتف")
 
     def _quick_send_to_device(self, device_ip, device_name):
-        """إرسال سريع: يفتح نافذة الإرسال للجهاز المحدد مباشرة"""
+        """إرسال سريع: يهيئ الجهاز المستهدف وينتقل إلى الصفحة الرئيسية للإرسال"""
         target_ip = device_ip
         if not target_ip:
             # محاولة البحث عن الجهاز في الشبكة
@@ -1999,8 +2141,8 @@ class WameedApp:
                     "ip": target_ip
                 })
 
-            # فتح نافذة الإرسال
-            self._show_send_dialog(device_ip=target_ip, device_name=device_name)
+            # الانتقال للصفحة الرئيسية لإتمام الإرسال من هناك
+            self.nb.select(self.tab_home)
         else:
             messagebox.showwarning("تنبيه", f"تعذر العثور على الجهاز '{device_name}' حالياً.\nتأكد من اتصال الهاتف بنفس الشبكة.")
 
@@ -3025,328 +3167,6 @@ if ($LaunchExe) {{
             sock.close()
         return None
 
-    def _show_send_dialog(self, device_ip=None, device_name=None):
-        """نافذة الإرسال الاحترافية - تدعم التعدد والتصميم الحديث"""
-        logger.info(f"📤 فتح نافذة الإرسال | الهدف: {device_name or 'غير محدد'} ({device_ip or state.get('target_ip', 'لا يوجد IP')})")
-        win = tk.Toplevel(self.root)
-        win.title(t("btn_send"))
-        win.geometry("520x680")
-        win.configure(bg=T.MINT)
-        win.transient(self.root)
-        win.grab_set()
-        win.resizable(False, False)
-
-        # المتغيرات
-        self.selected_files = [] # قائمة المسارات الكاملة
-
-        # ===== Header بتصميم أنيق =====
-        header_frame = tk.Frame(win, bg=T.MINT, padx=20, pady=18)
-        header_frame.pack(fill="x")
-
-        header_text = t("btn_send")
-        if device_name:
-            header_text = f"📤 {t('btn_send')} ← {device_name}"
-        tk.Label(header_frame, text=header_text, font=(FONT_AR, 15, "bold"),
-                bg=T.MINT, fg=T.GREEN).pack()
-
-        # ===== [Bottom Area] IP + Progress + Send — يُحزم أولاً ليبقى ثابتاً =====
-        bottom_frame = tk.Frame(win, bg=T.SURFACE, padx=20, pady=12)
-        bottom_frame.pack(side="bottom", fill="x")
-
-        # خط فاصل فوق المنطقة السفلية
-        tk.Frame(win, bg=T.BORDER_SOFT, height=1).pack(side="bottom", fill="x")
-
-        # تحديد IP الهدف تلقائياً (بدون عرض حقل IP في نافذة الإرسال)
-        initial_ip = device_ip or state.get("target_ip", "")
-        if not initial_ip and connected_device:
-            initial_ip = connected_device.get("ip", "")
-            if not device_name:
-                device_name = connected_device.get("name", "")
-
-        self.target_ip_var = tk.StringVar(value=initial_ip if initial_ip else "")
-
-        # حالة الإرسال (مخفية للبداية)
-        self.send_status_frame = tk.Frame(bottom_frame, bg=T.SURFACE)
-        self.progress_var = tk.DoubleVar(value=0)
-        self.progress_bar = ttk.Progressbar(self.send_status_frame, orient="horizontal",
-                                           mode="determinate", variable=self.progress_var)
-        self.progress_bar.pack(fill="x", pady=4)
-        self.progress_label = tk.Label(self.send_status_frame, text=t("preparing"),
-                                      bg=T.SURFACE, font=(FONT_AR, fs(9)), fg=T.TEXT_MUTED)
-        self.progress_label.pack()
-
-        def start_sending():
-            ip = self.target_ip_var.get().strip()
-            if not ip:
-                logger.warning("Send attempt failed: No target device connected.")
-                messagebox.showerror(t("error"), t("no_device_connected_error"))
-                return
-
-            mode = tabs.index(tabs.select())
-            logger.info(f"Send button clicked. Mode: {'Files' if mode == 0 else 'Text'}, Target IP: {ip}")
-
-            if mode == 0: # ملفات
-                if not self.selected_files:
-                    logger.warning("⚠️ محاولة إرسال فاشلة: لم يتم اختيار ملفات")
-                    messagebox.showerror(t("error"), t("select_file_first"))
-                    return
-            else: # نص
-                txt = self.send_text_area.get("1.0", "end").strip()
-                if not txt:
-                    logger.warning("Send attempt failed: Text area is empty.")
-                    messagebox.showerror(t("error"), t("enter_text_first"))
-                    return
-
-            self.send_status_frame.pack(fill="x", before=send_btn, pady=(4, 0))
-            send_btn.config(state="disabled", text=t("sending_progress"),
-                          bg=T.GREEN_LIGHT, cursor="watch")
-
-            ok, reason = self._verify_phone_websocket(ip, timeout=20)
-            if not ok:
-                logger.warning(f"⚠️ Preflight failed before sending to {ip}: {reason}")
-                report_windows_issue(
-                    "send_preflight_failed",
-                    level="warning",
-                    operation="send",
-                    phase="preflight",
-                    target_ip=ip,
-                    target_port=7789,
-                    reason=reason,
-                )
-                device_info = {
-                    "id": connected_device.get("id", "") if connected_device else "",
-                    "name": device_name or (connected_device.get("name") if connected_device else ip),
-                    "ip": ip
-                }
-                self._set_connection_state("discovered", device_info)
-                self._show_inline_message(win, t("preflight_failed"), "#EF4444", duration=4000)
-                self.send_status_frame.pack_forget()
-                send_btn.config(state="normal", text=t("send_now"), bg=T.GREEN, cursor="hand2")
-                return
-
-            if mode == 0: # ملفات
-                logger.info(f"Starting to send {len(self.selected_files)} files to {ip}")
-                threading.Thread(target=self._execute_multi_send, args=(ip, self.selected_files, win, send_btn, device_name), daemon=True).start()
-            else: # نص
-                logger.info(f"Starting to send text content ({len(txt)} chars) to {ip}")
-                threading.Thread(target=self._execute_send_text, args=(ip, txt, win, self.progress_var, device_name, lambda: win.destroy()), daemon=True).start()
-
-        send_btn = tk.Button(bottom_frame, text=t("send_now"), command=start_sending,
-                            bg=T.GREEN, fg="white", font=(FONT_AR, fs(14), "bold"),
-                            bd=0, pady=14, cursor="hand2",
-                            activebackground=T.GREEN_HOVER, activeforeground="white")
-        send_btn.pack(fill="x", pady=(8, 0))
-
-        # ===== تبويبات التصميم الحديث =====
-        style = ttk.Style()
-        style.configure("Send.TNotebook", background=T.MINT, borderwidth=0)
-        style.configure("Send.TNotebook.Tab", font=(FONT_AR, fs(11)), padding=[20, 8])
-
-        tabs = ttk.Notebook(win, style="Send.TNotebook")
-        tabs.pack(fill="both", expand=True, padx=16, pady=(12, 8))
-
-        tab_file = tk.Frame(tabs, bg=T.SURFACE)
-        tab_text = tk.Frame(tabs, bg=T.SURFACE)
-
-        tabs.add(tab_file, text=f"  {t('tab_file')}  ")
-        tabs.add(tab_text, text=f"  {t('tab_text')}  ")
-
-        # ========== [1] تبويب الملفات (دعم التعدد) ==========
-        file_container = tk.Frame(tab_file, bg=T.SURFACE, padx=15, pady=12)
-        file_container.pack(fill="both", expand=True)
-
-        # منطقة السحب والإفلات — تصميم محسّن مع حدود منقطة
-        self.drop_frame = tk.Frame(file_container, bg=T.GREEN_95, height=90,
-                              highlightthickness=2, highlightbackground=T.GREEN_LIGHT)
-        self.drop_frame.pack(fill="x", pady=(0, 10))
-        self.drop_frame.pack_propagate(False)
-
-        drop_inner = tk.Frame(self.drop_frame, bg=T.GREEN_95)
-        drop_inner.pack(expand=True)
-
-        self.drop_icon = tk.Label(drop_inner, text="📂", font=(FONT_AR, 22), bg=T.GREEN_95, fg=T.SUCCESS)
-        self.drop_icon.pack(side="left" if LANG=="ar" else "right", padx=8)
-
-        drop_text_frame = tk.Frame(drop_inner, bg=T.GREEN_95)
-        drop_text_frame.pack(side="left" if LANG=="ar" else "right")
-
-        self.drop_txt = tk.Label(drop_text_frame, text=t("drop_here"),
-                                bg=T.GREEN_95, font=(FONT_AR, fs(11), "bold"), fg=T.GREEN_DARK)
-        self.drop_txt.pack()
-        tk.Label(drop_text_frame, text=t("or_click_browse"),
-                bg=T.GREEN_95, font=(FONT_AR, fs(9)), fg=T.GREEN).pack()
-
-        # قائمة الملفات المختارة (Scrollable)
-        list_header = tk.Frame(file_container, bg=T.SURFACE)
-        list_header.pack(fill="x")
-        tk.Label(list_header, text=t("selected_files"), bg=T.SURFACE,
-                font=(FONT_AR, fs(9), "bold"), fg=T.TEXT_SECOND).pack(
-                    side="right" if LANG=="ar" else "left")
-
-        # زر إضافة ملفات إضافية
-        add_more_btn = tk.Label(list_header, text=t("add_more"), bg=T.SURFACE,
-                               fg=T.GREEN, font=(FONT_AR, fs(9), "bold"), cursor="hand2")
-        add_more_btn.pack(side="left" if LANG=="ar" else "right")
-
-        self.files_list_frame = tk.Frame(file_container, bg=T.SURFACE_DIM,
-                                        highlightthickness=1, highlightbackground=T.BORDER_SOFT)
-        self.files_list_frame.pack(fill="both", expand=True, pady=5)
-
-        self.files_canvas = tk.Canvas(self.files_list_frame, bg=T.SURFACE_DIM, highlightthickness=0)
-        self.files_scroll = ttk.Scrollbar(self.files_list_frame, orient="vertical", command=self.files_canvas.yview)
-        self.files_inner = tk.Frame(self.files_canvas, bg=T.SURFACE_DIM)
-
-        self.files_inner.bind("<Configure>", lambda e: self.files_canvas.configure(scrollregion=self.files_canvas.bbox("all")))
-        self.files_canvas.create_window((0,0), window=self.files_inner, anchor="nw", width=400)
-        self.files_canvas.configure(yscrollcommand=self.files_scroll.set)
-
-        self.files_canvas.pack(side="left", fill="both", expand=True)
-        self.files_scroll.pack(side="right", fill="y")
-
-        def _get_file_type_icon(filename):
-            ext = os.path.splitext(filename)[1].lower()
-            icons = {
-                '.jpg': '🖼️', '.jpeg': '🖼️', '.png': '🖼️', '.gif': '🖼️', '.webp': '🖼️',
-                '.mp4': '🎬', '.avi': '🎬', '.mov': '🎬', '.mkv': '🎬',
-                '.mp3': '🎵', '.wav': '🎵', '.flac': '🎵',
-                '.pdf': '📕', '.doc': '📝', '.docx': '📝', '.txt': '📃',
-                '.zip': '📦', '.rar': '📦', '.7z': '📦',
-                '.exe': '⚙️', '.msi': '⚙️', '.apk': '📱'
-            }
-            return icons.get(ext, '📄')
-
-        def update_file_list_ui():
-            for w in self.files_inner.winfo_children(): w.destroy()
-            if not self.selected_files:
-                empty_frame = tk.Frame(self.files_inner, bg=T.SURFACE_DIM)
-                empty_frame.pack(expand=True, fill="both")
-                tk.Label(empty_frame, text="📭", font=(FONT_AR, fs(20)), bg=T.SURFACE_DIM, fg=T.TEXT_MUTED).pack(pady=(15, 2))
-                tk.Label(empty_frame, text=t("no_files_selected"),
-                        bg=T.SURFACE_DIM, fg=T.TEXT_MUTED, font=(FONT_AR, fs(10))).pack()
-                return
-
-            for idx, path in enumerate(self.selected_files):
-                fname = os.path.basename(path)
-                fsize = os.path.getsize(path) / 1024
-                size_str = f"{fsize:.1f} KB" if fsize < 1024 else f"{fsize/1024:.1f} MB"
-                icon = _get_file_type_icon(fname)
-
-                f_row = tk.Frame(self.files_inner, bg=T.SURFACE, pady=6, padx=10,
-                                 highlightthickness=1, highlightbackground=T.BORDER_SOFT)
-                f_row.pack(fill="x", pady=2, padx=4)
-
-                tk.Label(f_row, text=icon, bg=T.SURFACE, font=(FONT_AR, fs(14))).pack(
-                    side="right" if LANG=="ar" else "left")
-
-                info_frame = tk.Frame(f_row, bg=T.SURFACE)
-                info_frame.pack(side="right" if LANG=="ar" else "left", fill="x", expand=True, padx=8)
-                tk.Label(info_frame, text=fname, bg=T.SURFACE, fg=T.TEXT, font=(FONT_AR, fs(10)),
-                        anchor="e" if LANG=="ar" else "w").pack(fill="x")
-                tk.Label(info_frame, text=size_str, bg=T.SURFACE, fg=T.TEXT_MUTED,
-                        font=(FONT_AR, fs(8)), anchor="e" if LANG=="ar" else "w").pack(fill="x")
-
-                def remove_f(i=idx):
-                    removed_file = self.selected_files.pop(i)
-                    logger.info(f"File removed from list: {os.path.basename(removed_file)}")
-                    update_file_list_ui()
-
-                tk.Button(f_row, text="✕", command=remove_f, bg=T.SURFACE, fg=T.ERROR,
-                         bd=0, cursor="hand2", font=(FONT_AR, fs(10))).pack(
-                    side="left" if LANG=="ar" else "right", padx=5)
-
-        def on_add_click(event=None):
-            logger.info("Opening file picker dialog")
-            paths = filedialog.askopenfilenames()
-            if paths:
-                logger.info(f"User selected {len(paths)} files")
-                for p in paths:
-                    if p not in self.selected_files: self.selected_files.append(p)
-                update_file_list_ui()
-            else:
-                logger.info("File picker closed without selection")
-
-        self.drop_frame.bind("<Button-1>", on_add_click)
-        drop_inner.bind("<Button-1>", on_add_click)
-        self.drop_icon.bind("<Button-1>", on_add_click)
-        self.drop_txt.bind("<Button-1>", on_add_click)
-        add_more_btn.bind("<Button-1>", on_add_click)
-        update_file_list_ui()
-
-        if TKDND_AVAILABLE:
-            win.drop_target_register(DND_FILES)
-            win.dnd_bind('<<Drop>>', lambda e: self._handle_multi_drop(e, update_file_list_ui))
-
-        # ========== [2] تبويب النص — تصميم محسّن ==========
-        text_container = tk.Frame(tab_text, bg=T.SURFACE, padx=15, pady=12)
-        text_container.pack(fill="both", expand=True)
-
-        text_header = tk.Frame(text_container, bg=T.SURFACE)
-        text_header.pack(fill="x", pady=(0, 8))
-        tk.Label(text_header, text=t("text_input_hint"),
-                bg=T.SURFACE, font=(FONT_AR, fs(10), "bold"), fg=T.TEXT_SECOND).pack(
-                    side="right" if LANG=="ar" else "left")
-
-        # صندوق النص بتصميم أنيق
-        text_frame = tk.Frame(text_container, bg=T.SURFACE_DIM,
-                             highlightthickness=1, highlightbackground=T.BORDER_SOFT)
-        text_frame.pack(fill="both", expand=True)
-
-        self.send_text_area = tk.Text(text_frame, font=(FONT_AR, fs(12)), wrap="word",
-                                bd=0, relief="flat", padx=16, pady=14,
-                                bg=T.SURFACE_DIM, fg=T.TEXT,
-                                insertbackground=T.GREEN, insertwidth=2,
-                                undo=True, highlightthickness=0,
-                                selectbackground=T.GREEN_95, selectforeground=T.GREEN_DARK)
-        self.send_text_area.pack(fill="both", expand=True)
-
-        # دعم اللصق والاختصارات بشكل صريح ومرن
-        def handle_paste(e=None):
-            try:
-                content = win.clipboard_get()
-                logger.info(f"Pasted text into send area ({len(content)} characters)")
-                self.send_text_area.insert(tk.INSERT, content)
-                return "break" # منع السلوك الافتراضي المزدوج
-            except: pass
-
-        self.send_text_area.bind("<Control-v>", handle_paste)
-        self.send_text_area.bind("<Control-V>", handle_paste)
-        self.send_text_area.bind("<Control-a>", lambda e: self.send_text_area.tag_add("sel", "1.0", "end") or "break")
-        self.send_text_area.bind("<Control-A>", lambda e: self.send_text_area.tag_add("sel", "1.0", "end") or "break")
-
-        # أزرار أدوات النص
-        text_tools = tk.Frame(text_container, bg=T.SURFACE)
-        text_tools.pack(fill="x", pady=(8, 0))
-
-        def paste_now():
-            try:
-                content = win.clipboard_get()
-                logger.info(f"Paste button clicked. Adding {len(content)} characters")
-                self.send_text_area.insert(tk.INSERT, content)
-            except:
-                logger.warning("Paste failed: Clipboard might be empty or not contain text")
-
-        def clear_now():
-            logger.info("Text area cleared by user")
-            self.send_text_area.delete("1.0", "end")
-
-        self._modern_button(text_tools, text=t("paste_clipboard"), command=paste_now,
-                            variant="muted", width=120).pack(side="right" if LANG=="ar" else "left")
-        self._modern_button(text_tools, text=t("clear_all"), command=clear_now,
-                            variant="danger", width=120).pack(side="right" if LANG=="ar" else "left", padx=10)
-
-    def _handle_multi_drop(self, event, callback):
-        """معالجة إفلات ملفات متعددة"""
-        try:
-            cleaned_paths = parse_dropped_paths(getattr(event, "data", ""))
-
-            logger.info(f"تم استقبال {len(cleaned_paths)} ملفات عبر السحب والإفلات")
-            for p in cleaned_paths:
-                if os.path.exists(p) and p not in self.selected_files:
-                    self.selected_files.append(p)
-            callback()
-        except Exception as e:
-            logger.error(f"Multi-drop error: {e}")
-
     def _show_inline_message(self, window, message, color=T.GREEN, duration=2500, close_on_success=True):
         """عرض رسالة تنبيه داخلية بدلاً من messagebox"""
         msg_label = tk.Label(window, text=message, bg=color, fg="white", font=(FONT_AR, fs(10), "bold"), pady=10)
@@ -3445,6 +3265,7 @@ if ($LaunchExe) {{
                                     total_chunks = (fsize + chunk_size - 1) // chunk_size
                                     transfer_id = _transfer_id_for_file(path, fsize)
                                     ack_state = TransferAckState(total_bytes=fsize, total_chunks=total_chunks)
+                                    backpressure_timeout = _backpressure_timeout_for_size(fsize)
 
                                     def apply_transfer_status(status_msg):
                                         ack_state.apply_message(status_msg)
@@ -3483,7 +3304,7 @@ if ($LaunchExe) {{
                                                 peer_received_bytes=ack_state.received_bytes,
                                             ):
                                                 return
-                                            if time.time() - started > TRANSFER_BACKPRESSURE_TIMEOUT:
+                                            if time.time() - started > backpressure_timeout:
                                                 raise TimeoutError(f"Timeout waiting for phone receive buffer for {fname}")
                                             status_msg = await next_status(min(0.25, sleep_seconds))
                                             if status_msg is not None:
@@ -3603,7 +3424,10 @@ if ($LaunchExe) {{
                                 except Exception:
                                     pass
 
-                    except (ConnectionRefusedError, OSError) as e:
+                    except (ConnectionRefusedError, OSError, TimeoutError) as e:
+                        # TimeoutError is already an OSError subclass, so it's caught here
+                        # regardless — listed explicitly so a future edit to this tuple can't
+                        # silently stop retrying backpressure/save-ack timeouts on big files.
                         if attempt < max_retries - 1:
                             logger.warning(f"🔄 فشل الاتصال بـ {ip} (محاولة {attempt+1}/{max_retries}): {type(e).__name__}: {e}")
                             window.after(0, lambda a=attempt+1: self.progress_label.config(text=t("retry_connect").format(attempt=a, max=max_retries)))
@@ -3746,7 +3570,10 @@ if ($LaunchExe) {{
                 self.root.after(0, lambda: messagebox.showwarning(
                     "وميض", t("no_device_connected_error")))
                 return
-            self.root.after(0, self._show_send_dialog)
+            def _open_home():
+                self.show_window()
+                self.nb.select(self.tab_home)
+            self.root.after(0, _open_home)
 
         def on_folder(icon, item):
             try:
@@ -4395,7 +4222,17 @@ async def run_ws_server():
 def start_ws_thread():
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
-    loop.run_until_complete(run_ws_server())
+    try:
+        loop.run_until_complete(run_ws_server())
+    except OSError as e:
+        # Should be prevented by the single-instance lock (_acquire_instance_lock) now
+        # that it no longer uses SO_REUSEADDR — this is a defense-in-depth fallback in
+        # case another process entirely is squatting on PORT_WS.
+        logger.error(f"❌ تعذر تشغيل خادم الاستقبال على المنفذ {PORT_WS}: {e}. "
+                     f"تحقق من عدم وجود نسخة أخرى من وميض أو برنامج آخر يستخدم هذا المنفذ.")
+        report_windows_issue(
+            "ws_server_bind_failed", e, operation="startup", phase="ws_server", port=PORT_WS,
+        )
 
 def _get_subnet_broadcast() -> str:
     """
@@ -4528,7 +4365,12 @@ def _acquire_instance_lock() -> bool:
     global _instance_lock_sock
     try:
         _instance_lock_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        _instance_lock_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        # NOTE: deliberately no SO_REUSEADDR here. On Windows that flag lets a second
+        # process bind the *same* port a listening socket already holds instead of
+        # failing — which silently defeated this whole lock, letting a second full
+        # instance start up and only crash later when it couldn't bind the real WS
+        # server port (7788). We need bind() to fail here when another instance
+        # already holds this port, so the lock actually locks.
         _instance_lock_sock.bind(("127.0.0.1", INSTANCE_CONTROL_PORT))
         _instance_lock_sock.listen(5)
         _instance_lock_sock.settimeout(1.0)

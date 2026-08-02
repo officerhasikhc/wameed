@@ -102,6 +102,8 @@
 
     <!-- WameedSender & ConnectionService -->
     <string name="error_pc_not_configured">لم يتم ضبط عنوان الكمبيوتر</string>
+    <string name="waiting_for_activation">بانتظار تفعيل الجهاز المستقبل&#8230;</string>
+    <string name="error_receiver_not_ready_after_retry">تعذر الوصول إلى الجهاز المستقبل. تأكد أن الجهاز (كمبيوتر/هاتف/تابلت) قيد التشغيل وأن تطبيق وميض يعمل عليه.</string>
     <string name="status_connected">متصل</string>
     <string name="status_connecting">يتصل&#8230;</string>
     <string name="status_pc_unavailable">الكمبيوتر غير متاح</string>

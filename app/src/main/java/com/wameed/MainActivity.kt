@@ -967,13 +967,6 @@ fun ConnectionTab(
                         }
                     }
                 }
-                Spacer(Modifier.height(12.dp))
-                WameedPrimaryButton(
-                    text = if (isSendingBatch) stringResource(R.string.sending) else stringResource(R.string.send_all),
-                    onClick = onConfirmSend,
-                    enabled = connectionState == ConnectionState.Connected && !isSendingBatch,
-                    loading = isSendingBatch
-                )
             }
             Spacer(Modifier.height(18.dp))
         }
