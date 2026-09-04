@@ -12,6 +12,7 @@ import io.ktor.server.websocket.*
 import io.ktor.websocket.*
 import kotlinx.coroutines.*
 import kotlinx.serialization.json.*
+import org.json.JSONObject
 import java.io.IOException
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.time.Duration.Companion.seconds
@@ -50,9 +51,7 @@ class WameedServer(private val context: Context) {
         if (session != null) {
             CoroutineScope(Dispatchers.IO).launch {
                 try {
-                    val response = buildJsonObject {
-                        put("status", "paired")
-                    }.toString()
+                    val response = JSONObject().put("status", WameedProtocol.STATUS_PAIRED).toString()
                     session.send(Frame.Text(response))
                     Log.i(TAG, "Pairing approved by user")
                 } catch (e: Exception) {
@@ -67,10 +66,10 @@ class WameedServer(private val context: Context) {
         if (session != null) {
             CoroutineScope(Dispatchers.IO).launch {
                 try {
-                    val response = buildJsonObject {
-                        put("status", "rejected")
-                        put("message", "Connection rejected by user")
-                    }.toString()
+                    val response = JSONObject()
+                        .put("status", WameedProtocol.STATUS_REJECTED)
+                        .put("message", "Connection rejected by user")
+                        .toString()
                     session.send(Frame.Text(response))
                     session.close(CloseReason(CloseReason.Codes.NORMAL, "Rejected by user"))
                     Log.i(TAG, "Pairing rejected by user")
@@ -83,7 +82,7 @@ class WameedServer(private val context: Context) {
         }
     }
 
-    fun start(port: Int = 7789) {
+    fun start(port: Int = WameedProtocol.PHONE_WS_PORT) {
         if (isRunning.get()) return
 
         CoroutineScope(Dispatchers.IO).launch {
@@ -128,17 +127,16 @@ class WameedServer(private val context: Context) {
         var lastAckMs = 0L
         var deviceName = "PC"
 
-        suspend fun sendTransferStatus(status: String, extra: JsonObjectBuilder.() -> Unit = {}) {
-            session.send(Frame.Text(buildJsonObject {
-                put("status", status)
-                put("protocol_version", 2)
-                if (transferId.isNotBlank()) put("transfer_id", transferId)
-                put("received_bytes", receivedSize)
-                put("received", receivedSize)
-                put("chunk_index", chunkCount)
-                if (expectedChunks > 0) put("total_chunks", expectedChunks)
-                extra()
-            }.toString()))
+        suspend fun sendTransferStatus(status: String, extra: (JSONObject) -> Unit = {}) {
+            val frame = WameedProtocol.transferStatus(
+                status = status,
+                transferId = transferId,
+                receivedBytes = receivedSize,
+                chunkIndex = chunkCount,
+                totalChunks = expectedChunks,
+            )
+            extra(frame)
+            session.send(Frame.Text(frame.toString()))
         }
 
         suspend fun finalizeCurrentTransfer() {
@@ -148,9 +146,9 @@ class WameedServer(private val context: Context) {
                 phase = "finalizing",
                 sizeBytes = expectedSize,
                 bytesDone = receivedSize,
-                port = 7789
+                port = WameedProtocol.PHONE_WS_PORT
             )
-            sendTransferStatus("saving")
+            sendTransferStatus(WameedProtocol.STATUS_SAVING)
             withContext(Dispatchers.IO) {
                 target.flush()
                 target.close()
@@ -160,10 +158,10 @@ class WameedServer(private val context: Context) {
             finalFilename = target.filename
             currentDownload = null
             callback?.onTransferCompleted(finalUri, finalFilename, receivedSize)
-            sendTransferStatus("saved") {
-                finalUri?.let { put("uri", it) }
-                put("filename", finalFilename)
-                put("size", receivedSize)
+            sendTransferStatus(WameedProtocol.STATUS_SAVED) { f ->
+                finalUri?.let { f.put("uri", it) }
+                f.put("filename", finalFilename)
+                f.put("size", receivedSize)
             }
         }
 
@@ -175,7 +173,7 @@ class WameedServer(private val context: Context) {
                         val json = Json.parseToJsonElement(text).jsonObject
                         
                         when (json["type"]?.jsonPrimitive?.content) {
-                            "hello" -> {
+                            WameedProtocol.TYPE_HELLO -> {
                                 deviceName = json["device"]?.jsonPrimitive?.content ?: "PC"
                                 val deviceId = json["device_id"]?.jsonPrimitive?.content ?: ""
                                 
@@ -184,12 +182,7 @@ class WameedServer(private val context: Context) {
                                 
                                 // تحقق مما إذا كان الجهاز موثوقاً به أو هو الكمبيوتر المبرمج حالياً
                                 val savedIp = WameedPrefs.getPcIp(context)
-                                var remoteIp = session.call.request.local.remoteHost
-                                
-                                // تطبيع عنوان IP (إزالة ::ffff: إذا وجد)
-                                if (remoteIp.startsWith("::ffff:")) {
-                                    remoteIp = remoteIp.removePrefix("::ffff:")
-                                }
+                                val remoteIp = WameedProtocol.normalizeRemoteIp(session.call.request.local.remoteHost)
                                 
                                 Log.d(TAG, "Connection from remoteHost: $remoteIp, Saved PC IP: $savedIp")
 
@@ -210,7 +203,7 @@ class WameedServer(private val context: Context) {
                                     callback?.onPairingRequest(deviceName, deviceId)
                                 }
                             }
-                            "file_meta" -> {
+                            WameedProtocol.TYPE_FILE_META -> {
                                 val filename = json["filename"]?.jsonPrimitive?.content ?: "received_file"
                                 val mimeType = json["mime"]?.jsonPrimitive?.contentOrNull
                                 expectedSize = json["size"]?.jsonPrimitive?.content?.toLongOrNull() ?: 0L
@@ -227,9 +220,9 @@ class WameedServer(private val context: Context) {
                                 )
 
                                 if (target == null) {
-                                    sendTransferStatus("error") {
-                                        put("reason", "permission_denied")
-                                        put("message", "Could not open Downloads destination")
+                                    sendTransferStatus(WameedProtocol.STATUS_ERROR) { f ->
+                                        f.put("reason", "permission_denied")
+                                        f.put("message", "Could not open Downloads destination")
                                     }
                                     callback?.onError("Could not open Downloads destination")
                                     continue
@@ -249,39 +242,33 @@ class WameedServer(private val context: Context) {
                                     phase = "receive",
                                     sizeBytes = expectedSize,
                                     bytesDone = 0L,
-                                    port = 7789
+                                    port = WameedProtocol.PHONE_WS_PORT
                                 )
-                                sendTransferStatus("ready") {
-                                    put("offset", 0L)
-                                    finalUri?.let { put("uri", it) }
+                                sendTransferStatus(WameedProtocol.STATUS_READY) { f ->
+                                    f.put("offset", 0L)
+                                    finalUri?.let { f.put("uri", it) }
                                 }
 
                                 if (expectedSize == 0L) {
                                     finalizeCurrentTransfer()
                                 }
                             }
-                            "text" -> {
+                            WameedProtocol.TYPE_TEXT -> {
                                 val content = json["text"]?.jsonPrimitive?.content ?: ""
                                 Log.i(TAG, "Received text from $deviceName: ${content.take(50)}...")
                                 callback?.onTextReceived(content, deviceName)
-                                val response = buildJsonObject {
-                                    put("status", "saved")
-                                }.toString()
+                                val response = JSONObject().put("status", WameedProtocol.STATUS_SAVED).toString()
                                 session.send(Frame.Text(response))
                             }
-                            "url" -> {
+                            WameedProtocol.TYPE_URL -> {
                                 val url = json["url"]?.jsonPrimitive?.content ?: ""
                                 Log.i(TAG, "Received URL from $deviceName: $url")
                                 callback?.onUrlReceived(url, deviceName)
-                                val response = buildJsonObject {
-                                    put("status", "saved")
-                                }.toString()
+                                val response = JSONObject().put("status", WameedProtocol.STATUS_SAVED).toString()
                                 session.send(Frame.Text(response))
                             }
-                            "ping" -> {
-                                val response = buildJsonObject {
-                                    put("status", "pong")
-                                }.toString()
+                            WameedProtocol.TYPE_PING -> {
+                                val response = JSONObject().put("status", WameedProtocol.STATUS_PONG).toString()
                                 session.send(Frame.Text(response))
                             }
                         }
@@ -310,10 +297,10 @@ class WameedServer(private val context: Context) {
                                     phase = "receive",
                                     sizeBytes = expectedSize,
                                     bytesDone = receivedSize,
-                                    port = 7789
+                                    port = WameedProtocol.PHONE_WS_PORT
                                 )
-                                sendTransferStatus("progress") {
-                                    put("offset", receivedSize)
+                                sendTransferStatus(WameedProtocol.STATUS_PROGRESS) { f ->
+                                    f.put("offset", receivedSize)
                                 }
                                 lastAckMs = now
                             } catch (_: Exception) {}
@@ -333,7 +320,7 @@ class WameedServer(private val context: Context) {
                 phase = "receive",
                 sizeBytes = expectedSize,
                 bytesDone = receivedSize,
-                port = 7789,
+                port = WameedProtocol.PHONE_WS_PORT,
                 failureType = e.javaClass.simpleName
             )
             callback?.onError(e.message ?: "Transfer interrupted")

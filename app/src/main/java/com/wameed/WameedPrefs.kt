@@ -123,13 +123,11 @@ object WameedPrefs {
     }
 
     fun getPcPort(context: Context): Int {
-        return prefs(context).getInt(KEY_PC_PORT, 7788)
+        return prefs(context).getInt(KEY_PC_PORT, WameedProtocol.PC_WS_PORT)
     }
 
     fun getWsUrl(context: Context): String {
-        val ip = getPcIp(context)
-        val port = getPcPort(context)
-        return "ws://$ip:$port"
+        return WameedProtocol.wsUrl(getPcIp(context), getPcPort(context))
     }
 
     fun savePcAddress(context: Context, rawInput: String) {
@@ -143,7 +141,11 @@ object WameedPrefs {
         // فصل الـ IP عن المنفذ
         val parts = input.split(":")
         val ip = parts[0]
-        val port = if (parts.size > 1) parts[1].toIntOrNull() ?: 7788 else 7788
+        val port = if (parts.size > 1) {
+            parts[1].toIntOrNull() ?: WameedProtocol.PC_WS_PORT
+        } else {
+            WameedProtocol.PC_WS_PORT
+        }
 
         prefs(context).edit()
             .putString(KEY_PC_IP, ip)

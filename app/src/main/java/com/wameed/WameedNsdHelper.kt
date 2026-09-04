@@ -10,7 +10,7 @@ import android.util.Log
  */
 class WameedNsdHelper(context: Context) {
     private val TAG = "WameedNsdHelper"
-    private val SERVICE_TYPE = "_wameed._tcp"
+    private val SERVICE_TYPE = WameedProtocol.NSD_SERVICE_TYPE
     private val nsdManager = context.getSystemService(Context.NSD_SERVICE) as NsdManager
     
     private var registrationListener: NsdManager.RegistrationListener? = null

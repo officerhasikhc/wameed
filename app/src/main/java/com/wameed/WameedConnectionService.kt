@@ -399,16 +399,7 @@ class WameedConnectionService : Service() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
                 Log.i(TAG, "WS open — sending hello")
                 WameedLogger.net(TAG, "WS open → $url")
-                val deviceName = WameedPrefs.getDeviceName()
-                val hello = JSONObject().apply {
-                    put("type", "hello")
-                    put("device", deviceName)
-                    put("name", deviceName) // redundant but safer for some PC versions
-                    put("device_id", WameedPrefs.getOrCreateDeviceId(this@WameedConnectionService))
-                    put("app_version", BuildConfig.VERSION_NAME)
-                    put("receiver_port", 7789)
-                }
-                webSocket.send(hello.toString())
+                webSocket.send(WameedProtocol.hello(this@WameedConnectionService).toString())
                 pingFailures = 0
             }
 
@@ -418,12 +409,13 @@ class WameedConnectionService : Service() {
                 val status = resp.optString("status", "")
                 val type = resp.optString("type", "")
                 when {
-                    status == "paired" || status == "hello" || status == "pong" || type == "pong" -> {
+                    status in WameedProtocol.PAIRED_STATUSES ||
+                        status == WameedProtocol.STATUS_PONG || type == WameedProtocol.STATUS_PONG -> {
                         WameedEvents.tryEmit(WameedEvent.ServiceStatus(true, pcDisplay))
                         // ⚡ فتح اتصال دائم للإرسال الفوري بعد تأكيد المسار، لا بمجرد فتح socket.
                         WameedSender.openPersistent(this@WameedConnectionService)
                     }
-                    status == "pairing_required" || status == "rejected" -> {
+                    status == WameedProtocol.STATUS_PAIRING_REQUIRED || status == WameedProtocol.STATUS_REJECTED -> {
                         WameedEvents.tryEmit(WameedEvent.ServiceStatus(false, pcDisplay))
                     }
                 }
@@ -474,7 +466,7 @@ class WameedConnectionService : Service() {
                     schedulePing()
                     return@postDelayed
                 } else if (w != null) {
-                    val ok = w.send(JSONObject().put("type", "ping").toString())
+                    val ok = w.send(WameedProtocol.ping().toString())
                     if (!ok) {
                         pingFailures++
                         Log.w(TAG, "ping queue rejected — failures=$pingFailures")
@@ -680,7 +672,7 @@ class WameedConnectionService : Service() {
         if (nsdHelper == null) {
             nsdHelper = WameedNsdHelper(this)
         }
-        nsdHelper?.registerService(7789)
+        nsdHelper?.registerService(WameedProtocol.PHONE_WS_PORT)
 
         if (discoveryResponder == null) {
             discoveryResponder = WameedDiscoveryResponder(this)

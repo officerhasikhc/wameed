@@ -12,7 +12,7 @@ import java.net.InetSocketAddress
  */
 class WameedDiscoveryResponder(private val context: Context) {
     private val TAG = "WameedDiscoveryResp"
-    private val DISCOVERY_PORT = 7789
+    private val DISCOVERY_PORT = WameedProtocol.DISCOVERY_UDP_PORT
     private var socket: DatagramSocket? = null
     private var running = false
 
@@ -39,8 +39,7 @@ class WameedDiscoveryResponder(private val context: Context) {
                         val data = String(packet.data, 0, packet.length, Charsets.UTF_8)
                         val json = JSONObject(data)
                         
-                        if (json.optString("type") == "discovery_ping" &&
-                            json.optString("service") == "wameed_pc") {
+                        if (WameedProtocol.isDiscoveryPingFromPc(json)) {
                             Log.d(TAG, "Received discovery ping from ${packet.address}")
                             sendResponse(packet.address, packet.port)
                         }
@@ -58,16 +57,11 @@ class WameedDiscoveryResponder(private val context: Context) {
 
     private fun sendResponse(address: java.net.InetAddress, port: Int) {
         try {
-            val response = JSONObject().apply {
-                put("type", "discovery_pong")
-                put("service", "wameed_phone")
-                put("device", WameedPrefs.getDeviceName())
-                put("device_id", WameedPrefs.getOrCreateDeviceId(context))
-                put("ip", "127.0.0.1") // PC uses sender IP anyway, but keeping field for compatibility
-                put("name", WameedPrefs.getDeviceName()) // Adding 'name' for consistency with PC
-                put("port", 7789)
-                put("version", BuildConfig.VERSION_NAME)
-            }
+            val response = WameedProtocol.discoveryPong(
+                device = WameedPrefs.getDeviceName(),
+                deviceId = WameedPrefs.getOrCreateDeviceId(context),
+                appVersion = BuildConfig.VERSION_NAME,
+            )
             val data = response.toString().toByteArray(Charsets.UTF_8)
             val packet = DatagramPacket(data, data.size, address, port)
             socket?.send(packet)

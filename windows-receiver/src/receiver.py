@@ -41,6 +41,7 @@ import websockets
 from websockets.server import serve
 import subprocess
 from transfer_utils import SendBackpressure, TransferAckState, parse_dropped_paths
+import protocol
 
 try:
     import sentry_sdk
@@ -66,8 +67,9 @@ except Exception:
 VERSION = VERSION_NAME
 APP_NAME = "وميض (Wameed)"
 WINDOWS_APP_ID = "Wameed.Project.Desktop"
-PORT_WS = 7788
-PORT_UDP = 7789
+# مصدر أرقام المنافذ الوحيد هو protocol.py — هذه أسماء محلية للراحة فقط.
+PORT_WS = protocol.PC_WS_PORT
+PORT_UDP = protocol.DISCOVERY_UDP_PORT
 INSTANCE_CONTROL_PORT = 17788
 
 def _set_windows_app_user_model_id():
@@ -244,7 +246,7 @@ translations = {
         "diag_title": "تشخيص الشبكة والسجل",
         "firewall_copy": "📋 نسخ أوامر Firewall",
         "firewall_fix": "🛡️ إصلاح Firewall",
-        "firewall_confirm": "سيطلب ويندوز صلاحية المدير لفتح TCP 7788 و UDP 7789 لوميض. هل تريد المتابعة؟",
+        "firewall_confirm": f"سيطلب ويندوز صلاحية المدير لفتح TCP {protocol.PC_WS_PORT} و UDP {protocol.DISCOVERY_UDP_PORT} لوميض. هل تريد المتابعة؟",
         "firewall_copied": "تم نسخ أوامر Firewall",
         "preflight_failed": "الجهاز ظاهر، لكن الاتصال المباشر غير جاهز. افتح وميض على الهاتف ووافق على الاقتران.",
         "updates_title": "التحديثات",
@@ -267,7 +269,7 @@ translations = {
         "update_confirm_install": "سيتم إغلاق وميض وتشغيل المثبت لاستبدال النسخة الحالية. متابعة؟",
         "update_close": "إغلاق",
         "update_manifest_invalid": "ملف التحديث لا يحتوي على بيانات ويندوز صالحة.",
-        "firewall_blocked_msg": "يبدو أن Windows Firewall يحجب منفذ TCP 7788 المطلوب لاستقبال الملفات من الهاتف.\n\nهل تريد إضافة قاعدة Firewall تلقائياً؟ (يتطلب صلاحية المدير)",
+        "firewall_blocked_msg": f"يبدو أن Windows Firewall يحجب منفذ TCP {protocol.PC_WS_PORT} المطلوب لاستقبال الملفات من الهاتف.\n\nهل تريد إضافة قاعدة Firewall تلقائياً؟ (يتطلب صلاحية المدير)",
         "diag_send_test_report": "إرسال تقرير اختبار",
         "diag_test_report_sent": "تم تسجيل تقرير اختبار.\nالمعرّف: {report_id}",
         "diag_test_report_not_sent": "تم حفظ تقرير الاختبار محلياً فقط.\nأضف sentryDsn في version.properties لتفعيل الإرسال."
@@ -375,7 +377,7 @@ translations = {
         "diag_title": "Network Diagnostics & Log",
         "firewall_copy": "📋 Copy Firewall Commands",
         "firewall_fix": "🛡️ Fix Firewall",
-        "firewall_confirm": "Windows will request administrator permission to open TCP 7788 and UDP 7789 for Wameed. Continue?",
+        "firewall_confirm": f"Windows will request administrator permission to open TCP {protocol.PC_WS_PORT} and UDP {protocol.DISCOVERY_UDP_PORT} for Wameed. Continue?",
         "firewall_copied": "Firewall commands copied",
         "preflight_failed": "The device is visible, but the direct connection is not ready. Open Wameed on the phone and approve pairing.",
         "updates_title": "Updates",
@@ -398,7 +400,7 @@ translations = {
         "update_confirm_install": "Wameed will close and start the installer to replace the current version. Continue?",
         "update_close": "Close",
         "update_manifest_invalid": "The update file does not contain valid Windows update data.",
-        "firewall_blocked_msg": "Windows Firewall appears to be blocking TCP port 7788 required to receive files from the phone.\n\nWould you like to add a firewall rule automatically? (Requires administrator permission)",
+        "firewall_blocked_msg": f"Windows Firewall appears to be blocking TCP port {protocol.PC_WS_PORT} required to receive files from the phone.\n\nWould you like to add a firewall rule automatically? (Requires administrator permission)",
         "diag_send_test_report": "Send Test Report",
         "diag_test_report_sent": "Test report recorded.\nID: {report_id}",
         "diag_test_report_not_sent": "The test report was saved locally only.\nAdd sentryDsn in version.properties to enable uploads."
@@ -620,8 +622,8 @@ def install_global_exception_hooks():
     if previous_thread_hook:
         threading.excepthook = thread_hook
 
-TRANSFER_PROTOCOL_VERSION = 2
-TRANSFER_CHUNK_SIZE = 512 * 1024
+TRANSFER_PROTOCOL_VERSION = protocol.PROTOCOL_VERSION
+TRANSFER_CHUNK_SIZE = protocol.TRANSFER_CHUNK_SIZE
 TRANSFER_MAX_FRAME_SIZE = 8 * 1024 * 1024
 TRANSFER_PEER_IN_FLIGHT_LIMIT = 8 * 1024 * 1024
 TRANSFER_QUEUE_SOFT_LIMIT = 8 * 1024 * 1024
@@ -643,8 +645,7 @@ def _ensure_unique_path(path):
         counter += 1
 
 def _transfer_id_for_file(path, size):
-    raw = f"{os.path.basename(path).lower()}:{int(size)}".encode("utf-8", errors="ignore")
-    return "w2a-" + hashlib.sha256(raw).hexdigest()[:20]
+    return protocol.transfer_id_for_file(path, size)
 
 def _ack_timeout_for_size(size_bytes):
     # Finalization on mobile storage can be slow; keep this bounded but size-aware.
@@ -657,12 +658,7 @@ def _backpressure_timeout_for_size(size_bytes):
     return max(TRANSFER_BACKPRESSURE_TIMEOUT, min(1800, int(size_bytes / (2 * 1024 * 1024)) + 90))
 
 async def _send_transfer_status(websocket, status, **fields):
-    payload = {
-        "status": status,
-        "protocol_version": TRANSFER_PROTOCOL_VERSION,
-        **fields,
-    }
-    await websocket.send(json.dumps(payload))
+    await websocket.send(json.dumps(protocol.build_transfer_status(status, **fields)))
 
 # ======================== Utils ========================
 def get_resource_path(relative_path):
@@ -1815,12 +1811,7 @@ class WameedApp:
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
             sock.settimeout(1.5)  # per-recv timeout, not total
 
-            message = json.dumps({
-                "type": "discovery_ping",
-                "service": "wameed_pc",
-                "device": socket.gethostname(),
-                "port": PORT_WS
-            }).encode('utf-8')
+            message = json.dumps(protocol.build_discovery_ping(socket.gethostname())).encode('utf-8')
 
             # Burst: إرسال 3 حزم broadcast متتالية لزيادة احتمالية الوصول
             targets = [('<broadcast>', PORT_UDP), ('255.255.255.255', PORT_UDP)]
@@ -1852,7 +1843,7 @@ class WameedApp:
                 try:
                     data, addr = sock.recvfrom(1024)
                     resp = json.loads(data.decode('utf-8'))
-                    if resp.get("type") == "discovery_pong" and resp.get("service") == "wameed_phone":
+                    if protocol.is_pong_from_phone(resp):
                         ip = addr[0]
                         if ip not in seen_ips:
                             seen_ips.add(ip)
@@ -1880,7 +1871,7 @@ class WameedApp:
 
         return devices
 
-    def _verify_device_connection(self, ip, port=7789, timeout=3.0):
+    def _verify_device_connection(self, ip, port=protocol.PHONE_WS_PORT, timeout=3.0):
         """TCP reachability check — verifies the phone's WS server is actually accepting connections"""
         try:
             s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -1894,19 +1885,14 @@ class WameedApp:
     def _verify_phone_websocket(self, ip, timeout=25):
         """Verify PC -> phone WebSocket and pairing, not just TCP reachability."""
         async def verify():
-            uri = f"ws://{ip}:7789"
+            uri = protocol.ws_url(ip, protocol.PHONE_WS_PORT)
             async with websockets.connect(
                 uri,
                 open_timeout=min(5, timeout),
                 ping_interval=None,
                 close_timeout=1
             ) as ws:
-                await ws.send(json.dumps({
-                    "type": "hello",
-                    "device": socket.gethostname(),
-                    "device_id": "pc_client",
-                    "app_version": VERSION
-                }))
+                await ws.send(json.dumps(protocol.build_hello(socket.gethostname(), VERSION)))
 
                 deadline = time.time() + timeout
                 last_status = ""
@@ -1924,11 +1910,11 @@ class WameedApp:
 
                     status = resp.get("status", "")
                     last_status = status or last_status
-                    if status == "paired":
-                        return True, "paired"
-                    if status == "rejected":
-                        return False, resp.get("message", "rejected")
-                    if status == "pairing_required":
+                    if status in protocol.PAIRED_STATUSES:
+                        return True, protocol.STATUS_PAIRED
+                    if status == protocol.STATUS_REJECTED:
+                        return False, resp.get("message", protocol.STATUS_REJECTED)
+                    if status == protocol.STATUS_PAIRING_REQUIRED:
                         continue
 
                 return False, last_status or "timeout"
@@ -2997,12 +2983,12 @@ if ($LaunchExe) {{
                     start = time.time()
                     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                     s.settimeout(3)
-                    s.connect((target_ip, 7789))
+                    s.connect((target_ip, protocol.PHONE_WS_PORT))
                     s.close()
                     elapsed = int((time.time() - start) * 1000)
-                    results_text.insert(tk.END, f"✅ TCP {target_ip}:7789 — {elapsed}ms\n", "pass")
+                    results_text.insert(tk.END, f"✅ TCP {target_ip}:{protocol.PHONE_WS_PORT} — {elapsed}ms\n", "pass")
                 except Exception as e:
-                    results_text.insert(tk.END, f"❌ TCP {target_ip}:7789 — {e}\n", "fail")
+                    results_text.insert(tk.END, f"❌ TCP {target_ip}:{protocol.PHONE_WS_PORT} — {e}\n", "fail")
 
                 # ICMP Ping (Windows has ping command)
                 try:
@@ -3060,7 +3046,7 @@ if ($LaunchExe) {{
             results_text.insert(tk.END, "If tests fail, check Windows Firewall and network profile:\n")
             results_text.insert(tk.END, f"  - Phone -> PC requires inbound TCP {PORT_WS}\n")
             results_text.insert(tk.END, f"  - Discovery requires UDP {PORT_UDP}\n")
-            results_text.insert(tk.END, "  - PC -> Phone requires outbound TCP 7789\n")
+            results_text.insert(tk.END, f"  - PC -> Phone requires outbound TCP {protocol.PHONE_WS_PORT}\n")
             results_text.insert(tk.END, "  - Private network is recommended; Guest/VPN networks can isolate devices\n")
 
             results_text.insert(tk.END, f"\n{'='*40}\n", "header")
@@ -3104,7 +3090,7 @@ if ($LaunchExe) {{
             f'netsh advfirewall firewall add rule name="Wameed TCP {PORT_WS}" dir=in action=allow protocol=TCP localport={PORT_WS}',
             f'netsh advfirewall firewall add rule name="Wameed UDP {PORT_UDP} In" dir=in action=allow protocol=UDP localport={PORT_UDP}',
             f'netsh advfirewall firewall add rule name="Wameed UDP {PORT_UDP} Out" dir=out action=allow protocol=UDP localport={PORT_UDP}',
-            'netsh advfirewall firewall add rule name="Wameed TCP 7789 Out" dir=out action=allow protocol=TCP remoteport=7789',
+            f'netsh advfirewall firewall add rule name="Wameed TCP {protocol.PHONE_WS_PORT} Out" dir=out action=allow protocol=TCP remoteport={protocol.PHONE_WS_PORT}',
         ]
 
     def _copy_firewall_commands(self):
@@ -3133,40 +3119,6 @@ if ($LaunchExe) {{
             report_windows_issue("firewall_fix_failed", e, operation="network", phase="firewall_fix")
             messagebox.showerror(t("error"), str(e))
 
-    def _broadcast_discovery(self, timeout=2.0):
-        """يرسل رسالة UDP Broadcast للبحث عن الهواتف التي تشغل تطبيق وميض"""
-        try:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-            sock.settimeout(timeout)
-
-            message = json.dumps({
-                "type": "discovery_ping",
-                "service": "wameed_pc",
-                "device": socket.gethostname(),
-                "port": PORT_WS
-            }).encode('utf-8')
-
-            sock.sendto(message, ('<broadcast>', PORT_UDP))
-
-            start_time = time.time()
-            while time.time() - start_time < timeout:
-                try:
-                    data, addr = sock.recvfrom(1024)
-                    resp = json.loads(data.decode('utf-8'))
-                    if resp.get("type") == "discovery_pong" and resp.get("service") == "wameed_phone":
-                        logger.info(f"Found Wameed Phone at {addr[0]}")
-                        return addr[0]
-                except socket.timeout:
-                    break
-                except Exception as e:
-                    logger.error(f"Error during discovery recv: {e}")
-        except Exception as e:
-            logger.error(f"Discovery error: {e}")
-        finally:
-            sock.close()
-        return None
-
     def _show_inline_message(self, window, message, color=T.GREEN, duration=2500, close_on_success=True):
         """عرض رسالة تنبيه داخلية بدلاً من messagebox"""
         msg_label = tk.Label(window, text=message, bg=color, fg="white", font=(FONT_AR, fs(10), "bold"), pady=10)
@@ -3192,7 +3144,7 @@ if ($LaunchExe) {{
             try:
                 for attempt in range(max_retries):
                     try:
-                        uri = f"ws://{ip}:7789"
+                        uri = protocol.ws_url(ip, protocol.PHONE_WS_PORT)
                         # File transfers carry their own progress acknowledgements; websocket pings
                         # are disabled here to avoid Broken Pipe during heavy binary streaming.
                         async with websockets.connect(
@@ -3204,19 +3156,13 @@ if ($LaunchExe) {{
                             max_queue=8,
                         ) as ws:
                             # Hello
-                            await ws.send(json.dumps({
-                                "type": "hello",
-                                "device": socket.gethostname(),
-                                "device_id": "pc_client",
-                                "app_version": VERSION,
-                                "protocol_version": TRANSFER_PROTOCOL_VERSION,
-                            }))
+                            await ws.send(json.dumps(protocol.build_hello(socket.gethostname(), VERSION)))
 
                             # استلام الرد مع مهلة زمنية
                             resp_raw = await asyncio.wait_for(ws.recv(), timeout=15)
                             resp = json.loads(resp_raw)
 
-                            if resp.get("status") != "paired":
+                            if resp.get("status") not in protocol.PAIRED_STATUSES:
                                 logger.warning(f"تم رفض الاتصال من الهاتف ({ip})")
                                 window.after(0, lambda: self._show_inline_message(window, "❌ تم رفض الاتصال من الهاتف", "#EF4444"))
                                 return
@@ -3272,11 +3218,12 @@ if ($LaunchExe) {{
                                         status = ack_state.status
                                         if status == "failed":
                                             raise Exception(ack_state.message or "خطأ غير معروف في الهاتف")
-                                        if status == "saving":
+                                        if status == protocol.STATUS_SAVING:
                                             logger.info(f"الهاتف يقوم بحفظ الملف {fname}...")
                                             window.after(0, lambda n=fname: self.progress_label.config(text=t("saving_file").format(name=n)))
-                                        if status in {"ready", "progress", "saving", "saved"}:
-                                            pct = 100 if status == "saved" else min(99.0, ack_state.progress_percent)
+                                        if status in {protocol.STATUS_READY, protocol.STATUS_PROGRESS,
+                                                      protocol.STATUS_SAVING, protocol.STATUS_SAVED}:
+                                            pct = 100 if status == protocol.STATUS_SAVED else min(99.0, ack_state.progress_percent)
                                             window.after(0, lambda p=pct: self.progress_var.set(p))
 
                                     async def drain_statuses():
@@ -3313,16 +3260,12 @@ if ($LaunchExe) {{
                                                 await asyncio.sleep(sleep_seconds)
                                             sleep_seconds = min(0.25, sleep_seconds * 2)
 
-                                    await ws.send(json.dumps({
-                                        "type": "file_meta",
-                                        "protocol_version": TRANSFER_PROTOCOL_VERSION,
-                                        "transfer_id": transfer_id,
-                                        "direction": "windows_to_android",
-                                        "filename": fname,
-                                        "size": fsize,
-                                        "chunks": total_chunks,
-                                        "chunk_size": chunk_size,
-                                    }))
+                                    await ws.send(json.dumps(protocol.build_file_meta(
+                                        transfer_id=transfer_id,
+                                        filename=fname,
+                                        size=fsize,
+                                        chunks=total_chunks,
+                                    )))
 
                                     resume_offset = 0
                                     ready_deadline = time.time() + 5
@@ -3332,15 +3275,15 @@ if ($LaunchExe) {{
                                             break
                                         status = status_msg.get("status")
                                         apply_transfer_status(status_msg)
-                                        if status == "ready":
+                                        if status == protocol.STATUS_READY:
                                             resume_offset = max(0, min(int(status_msg.get("offset", 0) or 0), fsize))
                                             ack_state.received_bytes = max(ack_state.received_bytes, resume_offset)
                                             logger.info(f"الهاتف جاهز لاستقبال {fname}; resume_offset={resume_offset}")
                                             break
-                                        if status in {"progress", "saving", "saved"}:
+                                        if status in {protocol.STATUS_PROGRESS, protocol.STATUS_SAVING, protocol.STATUS_SAVED}:
                                             break
 
-                                    if resume_offset == 0 and ack_state.status != "ready":
+                                    if resume_offset == 0 and ack_state.status != protocol.STATUS_READY:
                                         logger.info("لم يصل ready من الهاتف؛ المتابعة بتوافق البروتوكول القديم")
 
                                     sent = resume_offset
@@ -3387,7 +3330,7 @@ if ($LaunchExe) {{
 
                                         apply_transfer_status(status_msg)
                                         last_status = time.time()
-                                        if ack_state.status == "saved":
+                                        if ack_state.status == protocol.STATUS_SAVED:
                                             saved = True
                                             break
 
@@ -3447,7 +3390,7 @@ if ($LaunchExe) {{
                     operation="send",
                     phase="files",
                     target_ip=ip,
-                    target_port=7789,
+                    target_port=protocol.PHONE_WS_PORT,
                     file_count=len(files),
                 )
                 error_msg = str(e)
@@ -3467,20 +3410,15 @@ if ($LaunchExe) {{
         logger.info(f"بدء إرسال نص إلى الهاتف ({ip})")
         async def send_text_task():
             try:
-                uri = f"ws://{ip}:7789"
+                uri = protocol.ws_url(ip, protocol.PHONE_WS_PORT)
                 # ملاحظة: تم تغيير connect_timeout إلى open_timeout لتوافق مكتبة websockets
                 async with websockets.connect(uri, open_timeout=10) as websocket:
                     # إرسال hello
-                    await websocket.send(json.dumps({
-                        "type": "hello",
-                        "device": socket.gethostname(),
-                        "device_id": "pc_client",
-                        "app_version": VERSION
-                    }))
+                    await websocket.send(json.dumps(protocol.build_hello(socket.gethostname(), VERSION)))
 
                     resp_raw = await asyncio.wait_for(websocket.recv(), timeout=10)
                     resp = json.loads(resp_raw)
-                    if resp.get("status") != "paired":
+                    if resp.get("status") not in protocol.PAIRED_STATUSES:
                         logger.warning(f"تم رفض إرسال النص من الهاتف ({ip})")
                         window.after(0, lambda: self._show_inline_message(window, "❌ تم رفض الاتصال", "#EF4444"))
                         return
@@ -3489,18 +3427,15 @@ if ($LaunchExe) {{
                     window.after(0, lambda: progress_var.set(50))
 
                     # إرسال النص
-                    await websocket.send(json.dumps({
-                        "type": "text",
-                        "text": text
-                    }))
+                    await websocket.send(json.dumps(protocol.build_text(text)))
 
                     # استلام التأكيد مع مهلة زمنية
                     while True:
                         final_resp_raw = await asyncio.wait_for(websocket.recv(), timeout=15)
                         final_resp = json.loads(final_resp_raw)
-                        if final_resp.get("status") == "saving":
+                        if final_resp.get("status") == protocol.STATUS_SAVING:
                             continue
-                        if final_resp.get("status") == "saved":
+                        if final_resp.get("status") == protocol.STATUS_SAVED:
                             logger.info("تم إرسال النص بنجاح.")
                             # إضافة للسجل كـ نص مرسل
                             self.root.after(0, lambda: self.add_to_history(f"نص: {text[:30]}...", "", device_name=device_name or ip, direction="sent"))
@@ -3517,7 +3452,7 @@ if ($LaunchExe) {{
                             window.after(0, lambda: progress_var.set(100))
                             window.after(0, lambda: self._show_inline_message(window, "✅ تم إرسال النص بنجاح"))
                             break
-                        if final_resp.get("status") == "error":
+                        if final_resp.get("status") == protocol.STATUS_ERROR:
                             raise Exception(final_resp.get("message", "خطأ في الهاتف"))
 
             except Exception as e:
@@ -3528,7 +3463,7 @@ if ($LaunchExe) {{
                     operation="send",
                     phase="text",
                     target_ip=ip,
-                    target_port=7789,
+                    target_port=protocol.PHONE_WS_PORT,
                     text_length=len(text),
                 )
                 window.after(0, lambda: self._show_inline_message(window, f"❌ فشل الإرسال: {str(e)[:40]}", "#EF4444"))
@@ -3870,11 +3805,11 @@ async def handle_client(websocket, path=None):
                 data = json.loads(message)
                 mtype = data.get("type")
 
-                if mtype == "ping":
-                    await websocket.send(json.dumps({"type": "pong"}))
+                if mtype == protocol.TYPE_PING:
+                    await websocket.send(json.dumps(protocol.build_pong()))
                     continue
 
-                if mtype == "hello":
+                if mtype == protocol.TYPE_HELLO:
                     device_id = data.get("device_id")
                     device_name = data.get("device")
                     logger.info(f"طلب مصافحة من جهاز: {device_name} ({device_id})")
@@ -3896,11 +3831,11 @@ async def handle_client(websocket, path=None):
 
                     if is_trusted:
                         logger.info(f"تم قبول الاتصال تلقائياً: {device_name} (جهاز موثوق)")
-                        await websocket.send(json.dumps({"status": "paired"}))
+                        await websocket.send(json.dumps(protocol.build_pairing_response(protocol.STATUS_PAIRED)))
                         app.root.after(0, lambda: _mark_connected(device_id, device_name, client_ip))
                     else:
                         logger.info(f"جهاز غير معروف '{device_name}' يطلب الاقتران. بانتظار رد المستخدم...")
-                        await websocket.send(json.dumps({"status": "pairing_required"}))
+                        await websocket.send(json.dumps(protocol.build_pairing_response(protocol.STATUS_PAIRING_REQUIRED)))
 
                         loop = asyncio.get_event_loop()
                         approved = await loop.run_in_executor(
@@ -3914,12 +3849,13 @@ async def handle_client(websocket, path=None):
                             save_config()
                             app.root.after(0, app.refresh_devices_list)
                             app.root.after(0, lambda: _mark_connected(device_id, device_name, client_ip))
-                            await websocket.send(json.dumps({"status": "paired"}))
+                            await websocket.send(json.dumps(protocol.build_pairing_response(protocol.STATUS_PAIRED)))
                         else:
                             logger.warning(f"تم رفض اقتران الجهاز: {device_name}")
-                            await websocket.send(json.dumps({"status": "rejected", "message": "تم رفض الاقتران من المستخدم"}))
+                            await websocket.send(json.dumps(protocol.build_pairing_response(
+                                protocol.STATUS_REJECTED, "تم رفض الاقتران من المستخدم")))
 
-                elif mtype == "text":
+                elif mtype == protocol.TYPE_TEXT:
                     text = data.get("text")
                     logger.info(f"استلام نص من الهاتف (الطول: {len(text)} حرف)")
                     # نسخ النص — pyperclip (أفضل مع Unicode) مع fallback لـ tkinter
@@ -3930,21 +3866,21 @@ async def handle_client(websocket, path=None):
                         app.root.clipboard_clear()
                         app.root.clipboard_append(text)
                     # ⚡ إرسال saved فوراً قبل الأعمال الثانوية
-                    await websocket.send(json.dumps({"status": "saved"}))
+                    await websocket.send(json.dumps({"status": protocol.STATUS_SAVED}))
                     device_name = connected_device.get("name") if connected_device else "جهاز غير معروف"
                     app.add_to_history(f"نص: {text[:30]}...", "", device_name)
                     show_notification("Wameed - نص جديد", f"تم نسخ النص إلى الحافظة تلقائياً")
 
-                elif mtype == "url":
+                elif mtype == protocol.TYPE_URL:
                     url = data.get("url")
                     logger.info(f"استلام رابط من الهاتف: {url}")
                     # ⚡ إرسال saved فوراً قبل الأعمال الثانوية
-                    await websocket.send(json.dumps({"status": "saved"}))
+                    await websocket.send(json.dumps({"status": protocol.STATUS_SAVED}))
                     device_name = connected_device.get("name") if connected_device else "جهاز غير معروف"
                     app.add_to_history(f"رابط: {url[:40]}", "", device_name)
                     if state["auto_open"]: webbrowser.open(url)
 
-                elif mtype == "file_meta":
+                elif mtype == protocol.TYPE_FILE_META:
                     filename = _safe_filename(data.get("filename"))
                     chunks = int(data.get("chunks") or 0)
                     fsize = int(data.get("size", 0) or 0)
@@ -3978,11 +3914,10 @@ async def handle_client(websocket, path=None):
 
                         await _send_transfer_status(
                             websocket,
-                            "ready",
+                            protocol.STATUS_READY,
                             transfer_id=transfer_id,
                             offset=resume_offset,
                             received_bytes=resume_offset,
-                            received=resume_offset,
                             total_chunks=chunks,
                         )
 
@@ -4007,10 +3942,9 @@ async def handle_client(websocket, path=None):
                                 if received_chunks % 8 == 0 or now - last_ack >= 1:
                                     await _send_transfer_status(
                                         websocket,
-                                        "progress",
+                                        protocol.STATUS_PROGRESS,
                                         transfer_id=transfer_id,
                                         received_bytes=received,
-                                        received=received,
                                         chunk_index=received_chunks,
                                         total_chunks=chunks,
                                     )
@@ -4023,10 +3957,9 @@ async def handle_client(websocket, path=None):
 
                         await _send_transfer_status(
                             websocket,
-                            "saving",
+                            protocol.STATUS_SAVING,
                             transfer_id=transfer_id,
                             received_bytes=received,
-                            received=received,
                             total_chunks=chunks,
                         )
                         os.replace(part_path, filepath)
@@ -4038,10 +3971,9 @@ async def handle_client(websocket, path=None):
 
                         await _send_transfer_status(
                             websocket,
-                            "saved",
+                            protocol.STATUS_SAVED,
                             transfer_id=transfer_id,
                             received_bytes=received,
-                            received=received,
                             path=filepath,
                             total_chunks=chunks,
                         )
@@ -4064,7 +3996,7 @@ async def handle_client(websocket, path=None):
                         )
                         await _send_transfer_status(
                             websocket,
-                            "error",
+                            protocol.STATUS_ERROR,
                             transfer_id=transfer_id,
                             reason=reason,
                             message=str(exc),
@@ -4287,15 +4219,13 @@ def udp_broadcast():
         logger.info(f"Subnet broadcast: {subnet_bc or 'يُستخدم 255.255.255.255 فقط'}")
 
         def _response(peer_ip=None) -> bytes:
-            return json.dumps({
-                "service": "wameed_pc",
-                "name":    socket.gethostname(),
-                "ip":      get_local_ip_for_peer(peer_ip),
-                "port":    PORT_WS,
-                "version": VERSION,
-                "ws_ready": True,
-                "connection_state": connection_state,
-            }, ensure_ascii=False).encode("utf-8")
+            announcement = protocol.build_pc_announcement(
+                name=socket.gethostname(),
+                ip=get_local_ip_for_peer(peer_ip),
+                version=VERSION,
+                connection_state=connection_state,
+            )
+            return json.dumps(announcement, ensure_ascii=False).encode("utf-8")
 
         while state["running"]:
             try:
@@ -4330,14 +4260,11 @@ def udp_broadcast():
                 except (json.JSONDecodeError, UnicodeDecodeError):
                     continue
 
-                svc      = req.get("service", "")
-                req_type = req.get("type", "")
-
-                if svc == "wameed_phone" or req_type == "discovery_ping":
+                if protocol.is_discovery_request_from_phone(req):
                     sock.sendto(_response(sender_ip), addr)
                     logger.info(f"✅ رد Discovery → {sender_ip} ({req.get('device', '?')})")
                 else:
-                    logger.debug(f"UDP: تجاهل حزمة من {sender_ip} | svc={svc}")
+                    logger.debug(f"UDP: تجاهل حزمة من {sender_ip} | svc={req.get('service', '')}")
 
             except Exception as e:
                 if state["running"]:

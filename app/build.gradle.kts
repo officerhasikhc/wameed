@@ -118,6 +118,8 @@ dependencies {
     implementation(libs.androidx.foundation)
     implementation(libs.androidx.runtime)
     testImplementation(libs.junit)
+    // org.json حقيقي لاختبارات JVM المحلية (نسخة أندرويد المدمجة مجرد stubs في unit tests)
+    testImplementation("org.json:json:20240303")
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
     androidTestImplementation(platform(libs.androidx.compose.bom))

@@ -523,17 +523,13 @@ private fun testUdpDiscovery(context: Context): DiagResult {
             broadcast = true
             soTimeout = 1000
         }
-        val ping = JSONObject().apply {
-            put("type", "discovery_ping")
-            put("service", "wameed_phone")
-            put("device", "diag_test")
-        }
+        val ping = WameedProtocol.discoveryPing("diag_test")
         val data = ping.toString().toByteArray(Charsets.UTF_8)
         val targets = linkedSetOf("255.255.255.255")
         getSubnetBroadcast()?.let { targets.add(it) }
         WameedPrefs.getPcIp(context).takeIf { it.isNotBlank() }?.let { targets.add(it) }
         targets.forEach { target ->
-            socket?.send(DatagramPacket(data, data.size, InetAddress.getByName(target), 7789))
+            socket?.send(DatagramPacket(data, data.size, InetAddress.getByName(target), WameedProtocol.DISCOVERY_UDP_PORT))
         }
 
         val buf = ByteArray(1024)
@@ -551,7 +547,7 @@ private fun testUdpDiscovery(context: Context): DiagResult {
                 val response = String(recv.data, 0, recv.length, Charsets.UTF_8)
                 val json = JSONObject(response)
                 val service = json.optString("service")
-                if (service == "wameed_pc") {
+                if (service == WameedProtocol.SERVICE_PC) {
                     return DiagResult("UDP Discovery", true, elapsed, "PC: ${json.optString("name")} (${recv.address.hostAddress})")
                 } else {
                     val source = recv.address?.hostAddress ?: "unknown"
@@ -564,14 +560,14 @@ private fun testUdpDiscovery(context: Context): DiagResult {
         }
 
         val detail = if (ignored.isNotEmpty()) {
-            "لم يصل رد الكمبيوتر عبر UDP 7789. تم تجاهل ردود غير مطابقة: ${ignored.distinct().take(3).joinToString(", ")}"
+            "لم يصل رد الكمبيوتر عبر UDP ${WameedProtocol.DISCOVERY_UDP_PORT}. تم تجاهل ردود غير مطابقة: ${ignored.distinct().take(3).joinToString(", ")}"
         } else {
-            "لم يصل رد UDP على المنفذ 7789. قد يكون broadcast محجوباً أو وميض على الكمبيوتر غير مفتوح."
+            "لم يصل رد UDP على المنفذ ${WameedProtocol.DISCOVERY_UDP_PORT}. قد يكون broadcast محجوباً أو وميض على الكمبيوتر غير مفتوح."
         }
         DiagResult("UDP Discovery", false, detail = detail)
     } catch (e: Exception) {
         val detail = when (e) {
-            is SocketTimeoutException -> "لم يصل رد UDP على المنفذ 7789. قد يكون broadcast محجوباً أو وميض على الكمبيوتر غير مفتوح."
+            is SocketTimeoutException -> "لم يصل رد UDP على المنفذ ${WameedProtocol.DISCOVERY_UDP_PORT}. قد يكون broadcast محجوباً أو وميض على الكمبيوتر غير مفتوح."
             else -> "${e.javaClass.simpleName}: ${e.message ?: "فشل غير معروف"}"
         }
         DiagResult("UDP Discovery", false, detail = detail)
@@ -639,16 +635,10 @@ private fun testWebSocket(context: Context, ip: String, port: Int): DiagResult {
             .readTimeout(5, TimeUnit.SECONDS)
             .build()
 
-        val request = Request.Builder().url("ws://$ip:$port").build()
+        val request = Request.Builder().url(WameedProtocol.wsUrl(ip, port)).build()
         val ws = client.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
-                val hello = JSONObject().apply {
-                    put("type", "hello")
-                    put("device", WameedPrefs.getDeviceName())
-                    put("device_id", WameedPrefs.getOrCreateDeviceId(context))
-                    put("app_version", BuildConfig.VERSION_NAME)
-                }
-                webSocket.send(hello.toString())
+                webSocket.send(WameedProtocol.hello(context).toString())
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {
@@ -713,7 +703,7 @@ private fun buildConnectionDiagnosis(
             ),
             nextSteps = listOf(
                 "إذا الإرسال نجح فلا تحتاج إجراء إضافي",
-                "إذا لم يظهر الجهاز تلقائياً لاحقاً استخدم IP يدوي أو افتح UDP 7789",
+                "إذا لم يظهر الجهاز تلقائياً لاحقاً استخدم IP يدوي أو افتح UDP ${WameedProtocol.DISCOVERY_UDP_PORT}",
                 "احتفظ بهذا التقرير فقط عند ظهور فشل إرسال فعلي"
             )
         )
@@ -728,29 +718,29 @@ private fun buildConnectionDiagnosis(
         udp?.passed == true && tcp?.passed != true -> ConnectionDiagnosis(
             title = "الاكتشاف يعمل لكن الإرسال محجوب",
             summary = "الاكتشاف عبر UDP يعمل، لكن الإرسال من الهاتف إلى الكمبيوتر على $ip:$port محجوب. ظهور اسم الجهاز لا يعني أن قناة الإرسال مفتوحة.",
-            likelyCauses = listOf("Windows Firewall يسمح بالاكتشاف لكنه يمنع TCP 7788", "وميض على الكمبيوتر يعلن نفسه بينما WebSocket متوقف", "الشبكة Public/VPN/Guest تعزل اتصال TCP بين الأجهزة"),
-            nextSteps = listOf("أعد تشغيل وميض على الكمبيوتر", "أضف قاعدة Firewall لمنفذ TCP 7788", "جرّب نفس الشبكة بدون Guest Wi-Fi أو Hotspot معزول")
+            likelyCauses = listOf("Windows Firewall يسمح بالاكتشاف لكنه يمنع TCP ${WameedProtocol.PC_WS_PORT}", "وميض على الكمبيوتر يعلن نفسه بينما WebSocket متوقف", "الشبكة Public/VPN/Guest تعزل اتصال TCP بين الأجهزة"),
+            nextSteps = listOf("أعد تشغيل وميض على الكمبيوتر", "أضف قاعدة Firewall لمنفذ TCP ${WameedProtocol.PC_WS_PORT}", "جرّب نفس الشبكة بدون Guest Wi-Fi أو Hotspot معزول")
         )
 
         ping?.passed == true && tcp?.passed != true -> ConnectionDiagnosis(
             title = "الجهاز موجود لكن منفذ وميض غير متاح",
             summary = "Ping إلى الكمبيوتر ناجح، لكن TCP/WebSocket على $ip:$port يفشل. الجهاز موجود على الشبكة، لكن قناة إرسال الهاتف للكمبيوتر غير مفتوحة.",
-            likelyCauses = listOf("Windows Firewall يمنع TCP 7788", "وميض على الكمبيوتر غير مفتوح أو لم يبدأ السيرفر", "الشبكة Public/VPN/Guest تعزل الاتصالات الداخلية"),
-            nextSteps = listOf("افتح وميض على الكمبيوتر وتأكد أنه يعمل", "اسمح للمنفذ TCP 7788 وUDP 7789 في Firewall", "اجعل شبكة ويندوز Private وأوقف VPN مؤقتاً")
+            likelyCauses = listOf("Windows Firewall يمنع TCP ${WameedProtocol.PC_WS_PORT}", "وميض على الكمبيوتر غير مفتوح أو لم يبدأ السيرفر", "الشبكة Public/VPN/Guest تعزل الاتصالات الداخلية"),
+            nextSteps = listOf("افتح وميض على الكمبيوتر وتأكد أنه يعمل", "اسمح للمنفذ TCP ${WameedProtocol.PC_WS_PORT} وUDP ${WameedProtocol.DISCOVERY_UDP_PORT} في Firewall", "اجعل شبكة ويندوز Private وأوقف VPN مؤقتاً")
         )
 
         tcp?.passed == true && ws?.passed != true -> ConnectionDiagnosis(
             title = "المنفذ مفتوح لكن WebSocket لا يكتمل",
             summary = "TCP يقبل الاتصال على $ip:$port، لكن بروتوكول وميض لا يحصل على رد WebSocket صحيح.",
-            likelyCauses = listOf("نسخة الكمبيوتر قديمة أو عالقة", "خدمة أخرى تستخدم المنفذ 7788", "سيرفر وميض بدأ ثم تعطل داخلياً"),
-            nextSteps = listOf("أغلق وميض من شريط المهام وافتحه من جديد", "تأكد أن Wameed.exe هو من يستمع على 7788", "ثبت نفس إصدار الحزمة على الهاتف والكمبيوتر")
+            likelyCauses = listOf("نسخة الكمبيوتر قديمة أو عالقة", "خدمة أخرى تستخدم المنفذ ${WameedProtocol.PC_WS_PORT}", "سيرفر وميض بدأ ثم تعطل داخلياً"),
+            nextSteps = listOf("أغلق وميض من شريط المهام وافتحه من جديد", "تأكد أن Wameed.exe هو من يستمع على ${WameedProtocol.PC_WS_PORT}", "ثبت نفس إصدار الحزمة على الهاتف والكمبيوتر")
         )
 
         udp?.passed != true && tcp?.passed == true -> ConnectionDiagnosis(
             title = "الاتصال اليدوي يعمل لكن الاكتشاف التلقائي محجوب",
             summary = "قناة الإرسال يمكن أن تعمل عبر IP محفوظ، لكن broadcast الخاص بالاكتشاف لا يصل.",
             likelyCauses = listOf("الراوتر يمنع UDP broadcast", "الشبكة Guest أو Enterprise", "بعض VPN/Hotspot يحجب حزم الاكتشاف"),
-            nextSteps = listOf("استخدم الإدخال اليدوي للـ IP", "افتح UDP 7789 في Firewall", "غيّر الشبكة أو عطّل عزل الأجهزة في الراوتر")
+            nextSteps = listOf("استخدم الإدخال اليدوي للـ IP", "افتح UDP ${WameedProtocol.DISCOVERY_UDP_PORT} في Firewall", "غيّر الشبكة أو عطّل عزل الأجهزة في الراوتر")
         )
 
         else -> ConnectionDiagnosis(
@@ -919,7 +909,7 @@ private fun reportDiagnosticsToFirebase(
             reporter.logEvent("pc_to_phone_ready", Bundle().apply {
                 putString("direction", "pc_to_phone")
                 putString("local_ip", maskIp(localIp))
-                putInt("target_port", 7789)
+                putInt("target_port", WameedProtocol.DISCOVERY_UDP_PORT)
             })
         }
 

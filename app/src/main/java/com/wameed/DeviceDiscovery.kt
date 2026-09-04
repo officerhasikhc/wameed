@@ -1,7 +1,6 @@
 package com.wameed
 
 import android.util.Log
-import org.json.JSONObject
 import java.net.DatagramPacket
 import java.net.DatagramSocket
 import java.net.InetAddress
@@ -15,7 +14,7 @@ import java.net.SocketTimeoutException
 class DeviceDiscovery {
 
     private val TAG = "DeviceDiscovery"
-    private val DISCOVERY_PORT = 7789
+    private val DISCOVERY_PORT = WameedProtocol.DISCOVERY_UDP_PORT
 
     data class DiscoveredDevice(
         val name: String,
@@ -76,21 +75,19 @@ class DeviceDiscovery {
 
                         val data = String(packet.data, 0, packet.length, Charsets.UTF_8)
                         Log.v(TAG, "استلام حزمة من ${packet.address.hostAddress}: $data")
-                        val json = JSONObject(data)
 
-                        if (json.optString("service") == "wameed_pc") {
-                            val packetIp = packet.address?.hostAddress ?: ""
-                            val reportedIp = json.optString("ip", "")
-                            val ip = if (isUsableRemoteIp(reportedIp)) reportedIp else packetIp
-                            val port = json.optInt("port", 7788)
-                            val name = json.optString("name", context.getString(R.string.label_pc_generic))
-                            val key = "$ip:$port"
-
+                        val pc = WameedProtocol.parsePcAnnouncement(
+                            data = data,
+                            senderIp = packet.address?.hostAddress ?: "",
+                            defaultName = context.getString(R.string.label_pc_generic),
+                        )
+                        if (pc != null) {
+                            val key = "${pc.ip}:${pc.port}"
                             if (key !in seen) {
                                 seen.add(key)
-                                val device = DiscoveredDevice(name, ip, port)
-                                Log.i(TAG, "✅ اكتشاف جهاز جديد: $name ($ip:$port)")
-                                WameedLogger.i(TAG, "اكتشاف جهاز: $name ($ip:$port)")
+                                val device = DiscoveredDevice(pc.name, pc.ip, pc.port)
+                                Log.i(TAG, "✅ اكتشاف جهاز جديد: ${pc.name} ($key)")
+                                WameedLogger.i(TAG, "اكتشاف جهاز: ${pc.name} ($key)")
                                 callback.onDeviceFound(device)
                             } else {
                                 Log.v(TAG, "تجاهل جهاز مكتشف مسبقاً: $key")
@@ -129,11 +126,7 @@ class DeviceDiscovery {
      */
     private fun sendDiscoveryPing(socket: DatagramSocket) {
         try {
-            val ping = JSONObject().apply {
-                put("type", "discovery_ping")
-                put("service", "wameed_phone")
-                put("device", android.os.Build.MODEL)
-            }
+            val ping = WameedProtocol.discoveryPing(android.os.Build.MODEL)
             val data = ping.toString().toByteArray(Charsets.UTF_8)
 
             // Send to global broadcast
@@ -180,14 +173,6 @@ class DeviceDiscovery {
             }
         } catch (_: Exception) {}
         return null
-    }
-
-    private fun isUsableRemoteIp(ip: String): Boolean {
-        if (ip.isBlank()) return false
-        if (ip == "0.0.0.0" || ip == "::" || ip == "::1") return false
-        if (ip.startsWith("127.")) return false
-        if (ip.equals("localhost", ignoreCase = true)) return false
-        return true
     }
 
     fun stop() {
