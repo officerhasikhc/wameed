@@ -102,6 +102,8 @@
 
     <!-- WameedSender & ConnectionService -->
     <string name="error_pc_not_configured">PC address not configured</string>
+    <string name="waiting_for_activation">Waiting for the receiving device to open Wameed&#8230;</string>
+    <string name="error_receiver_not_ready_after_retry">Couldn\'t reach the receiving device. Make sure it (computer, phone, or tablet) is turned on and Wameed is running on it.</string>
     <string name="status_connected">Connected</string>
     <string name="status_connecting">Connecting&#8230;</string>
     <string name="status_pc_unavailable">PC unavailable</string>

@@ -8,8 +8,6 @@ import okhttp3.*
 import okio.ByteString.Companion.toByteString
 import org.json.JSONObject
 import java.io.IOException
-import java.net.InetSocketAddress
-import java.net.Socket
 import java.util.concurrent.TimeUnit
 
 /**
@@ -20,8 +18,6 @@ class WameedSender(private val context: Context) {
     private val TAG = "WameedSender"
 
     companion object {
-        private const val TRANSFER_PROTOCOL_VERSION = 2
-        private const val TRANSFER_CHUNK_SIZE = 512 * 1024
         private const val WS_QUEUE_SOFT_LIMIT = 8L * 1024 * 1024
         private const val PEER_IN_FLIGHT_LIMIT = 8L * 1024 * 1024
         private const val CHUNK_ENQUEUE_TIMEOUT_MS = 120_000L
@@ -54,25 +50,6 @@ class WameedSender(private val context: Context) {
         private var persistentPort: Int = 0
         private val persistentLock = Any()
 
-        /** Fast TCP reachability check before opening a WebSocket. */
-        private fun isTcpReachable(ip: String, port: Int, timeoutMs: Int = 2000): Boolean {
-            return try {
-                Socket().use { s ->
-                    s.connect(InetSocketAddress(ip, port), timeoutMs)
-                    true
-                }
-            } catch (_: Exception) { false }
-        }
-
-        /** Best-effort host liveness (ICMP). Used to distinguish "PC off" vs
-         *  "PC on but Wameed crashed". May return false on some networks that
-         *  block ICMP even if the host is up — so this is only a hint. */
-        private fun isHostReachable(ip: String, timeoutMs: Int = 2000): Boolean {
-            return try {
-                java.net.InetAddress.getByName(ip).isReachable(timeoutMs)
-            } catch (_: Exception) { false }
-        }
-
         // ======================== Persistent WebSocket ========================
 
         /** فتح اتصال دائم مع الكمبيوتر (يُستدعى بعد أول اقتران ناجح) */
@@ -91,7 +68,7 @@ class WameedSender(private val context: Context) {
                 persistentPort = port
                 persistentPaired = false
 
-                val wsUrl = "ws://$ip:$port"
+                val wsUrl = WameedProtocol.wsUrl(ip, port)
                 Log.i("WameedSender", "⚡ فتح اتصال دائم: $wsUrl")
                 WameedLogger.net("WameedSender", "فتح اتصال دائم: $wsUrl")
                 val request = Request.Builder().url(wsUrl).build()
@@ -99,25 +76,19 @@ class WameedSender(private val context: Context) {
                     override fun onOpen(webSocket: WebSocket, response: Response) {
                         Log.i("WameedSender", "⚡ Persistent WS مفتوح، إرسال hello")
                         WameedLogger.net("WameedSender", "Persistent WS مفتوح")
-                        val hello = JSONObject().apply {
-                            put("type", "hello")
-                            put("device", WameedPrefs.getDeviceName())
-                            put("device_id", WameedPrefs.getOrCreateDeviceId(context))
-                            put("app_version", BuildConfig.VERSION_NAME)
-                        }
-                        webSocket.send(hello.toString())
+                        webSocket.send(WameedProtocol.hello(context).toString())
                     }
 
                     override fun onMessage(webSocket: WebSocket, text: String) {
                         try {
                             val resp = JSONObject(text)
                             when (resp.optString("status")) {
-                                "paired", "hello" -> {
+                                in WameedProtocol.PAIRED_STATUSES -> {
                                     persistentPaired = true
                                     Log.i("WameedSender", "⚡ Persistent WS مقترن وجاهز")
                                     WameedLogger.i("WameedSender", "Persistent WS مقترن وجاهز")
                                 }
-                                "rejected" -> {
+                                WameedProtocol.STATUS_REJECTED -> {
                                     Log.w("WameedSender", "⚡ Persistent WS مرفوض")
                                     closePersistent()
                                 }
@@ -181,6 +152,14 @@ class WameedSender(private val context: Context) {
         fun onInfo(message: String) {}
         /** Called when starting to send a new file in a batch. */
         fun onNextFile(index: Int, total: Int, fileName: String) {}
+        /**
+         * Same as [onError], but also classifies whether the failure is worth silently
+         * retrying (PC app not open yet, connection dropped) vs. terminal (explicit
+         * pairing rejection, device never configured). Defaults to [onError] so every
+         * existing implementer is unaffected; only [verifySendReady] callers that care
+         * about retry behavior need to override this one instead.
+         */
+        fun onError(error: String, retryable: Boolean) { onError(error) }
     }
 
     /** Record a successful send so MainActivity can show "متصل" even without
@@ -244,13 +223,7 @@ class WameedSender(private val context: Context) {
             override fun onOpen(webSocket: WebSocket, response: Response) {
                 Log.i(TAG, "تم فتح WebSocket لـ $ip، إرسال تحية 'hello'...")
                 lastProgressMs.set(System.currentTimeMillis())
-                val hello = JSONObject().apply {
-                    put("type", "hello")
-                    put("device", WameedPrefs.getDeviceName())
-                    put("device_id", WameedPrefs.getOrCreateDeviceId(context))
-                    put("app_version", BuildConfig.VERSION_NAME)
-                }
-                webSocket.send(hello.toString())
+                webSocket.send(WameedProtocol.hello(context).toString())
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {
@@ -261,11 +234,11 @@ class WameedSender(private val context: Context) {
                 try {
                     val resp = JSONObject(text)
                     when (resp.optString("status")) {
-                        "pairing_required" -> {
+                        WameedProtocol.STATUS_PAIRING_REQUIRED -> {
                             Log.i(TAG, "الكمبيوتر يطلب الاقتران (Pairing Required)")
                             callback.onInfo(context.getString(R.string.status_waiting_for_approval))
                         }
-                        "paired", "hello" -> {
+                        in WameedProtocol.PAIRED_STATUSES -> {
                             Log.i(TAG, "✅ تم الاتصال بنجاح مع $ip")
                             WameedLogger.i(TAG, "✅ تم الاتصال بنجاح مع $ip")
                             if (finishedFlag.compareAndSet(false, true)) {
@@ -276,7 +249,7 @@ class WameedSender(private val context: Context) {
                                 openPersistent(context)
                             }
                         }
-                        "rejected" -> {
+                        WameedProtocol.STATUS_REJECTED -> {
                             Log.w(TAG, "❌ الكمبيوتر رفض الاتصال")
                             if (finishedFlag.compareAndSet(false, true)) {
                                 val msg = resp.optString("message",
@@ -306,7 +279,7 @@ class WameedSender(private val context: Context) {
     fun verifySendReady(callback: SendCallback) {
         val ip = WameedPrefs.getPcIp(context)
         if (ip.isEmpty()) {
-            callback.onError(context.getString(R.string.error_pc_not_configured))
+            callback.onError(context.getString(R.string.error_pc_not_configured), false)
             return
         }
 
@@ -321,7 +294,7 @@ class WameedSender(private val context: Context) {
                 while (!finishedFlag.get()) {
                     if (System.currentTimeMillis() - lastProgressMs.get() > timeoutMs) {
                         if (finishedFlag.compareAndSet(false, true)) {
-                            callback.onError(context.getString(R.string.error_timeout_pc_no_response))
+                            callback.onError(context.getString(R.string.error_timeout_pc_no_response), true)
                         }
                         break
                     }
@@ -334,40 +307,35 @@ class WameedSender(private val context: Context) {
         client.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
                 lastProgressMs.set(System.currentTimeMillis())
-                val hello = JSONObject().apply {
-                    put("type", "hello")
-                    put("device", WameedPrefs.getDeviceName())
-                    put("device_id", WameedPrefs.getOrCreateDeviceId(context))
-                    put("app_version", BuildConfig.VERSION_NAME)
-                    put("verify_only", true)
-                }
-                webSocket.send(hello.toString())
+                webSocket.send(WameedProtocol.hello(context, verifyOnly = true).toString())
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {
                 lastProgressMs.set(System.currentTimeMillis())
                 val resp = try { JSONObject(text) } catch (_: Exception) { JSONObject() }
                 when (resp.optString("status")) {
-                    "pairing_required" -> callback.onInfo(context.getString(R.string.status_waiting_for_approval))
-                    "paired", "hello", "ready" -> {
+                    WameedProtocol.STATUS_PAIRING_REQUIRED -> callback.onInfo(context.getString(R.string.status_waiting_for_approval))
+                    in WameedProtocol.PAIRED_STATUSES, WameedProtocol.STATUS_READY -> {
                         if (finishedFlag.compareAndSet(false, true)) {
                             WameedPrefs.setLastConnected(context)
                             callback.onSuccess(context.getString(R.string.send_ready_to_pc))
                             try { webSocket.close(1000, null) } catch (_: Exception) {}
                         }
                     }
-                    "rejected" -> {
+                    WameedProtocol.STATUS_REJECTED -> {
                         if (finishedFlag.compareAndSet(false, true)) {
                             callback.onError(
-                                resp.optString("message", context.getString(R.string.error_pairing_rejected))
+                                resp.optString("message", context.getString(R.string.error_pairing_rejected)),
+                                false
                             )
                             try { webSocket.close(1000, null) } catch (_: Exception) {}
                         }
                     }
-                    "error" -> {
+                    WameedProtocol.STATUS_ERROR -> {
                         if (finishedFlag.compareAndSet(false, true)) {
                             callback.onError(
-                                resp.optString("message", context.getString(R.string.send_not_ready_to_pc))
+                                resp.optString("message", context.getString(R.string.send_not_ready_to_pc)),
+                                true
                             )
                             try { webSocket.close(1000, null) } catch (_: Exception) {}
                         }
@@ -382,14 +350,14 @@ class WameedSender(private val context: Context) {
                         t is java.net.SocketTimeoutException -> context.getString(R.string.error_socket_timeout)
                         else -> context.getString(R.string.error_connection_dropped, t.message ?: "")
                     }
-                    callback.onError(msg)
+                    callback.onError(msg, true)
                 }
             }
 
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
                 if (!finishedFlag.get() && code != 1000) {
                     if (finishedFlag.compareAndSet(false, true)) {
-                        callback.onError(context.getString(R.string.error_connect_failed))
+                        callback.onError(context.getString(R.string.error_connect_failed), true)
                     }
                 }
             }
@@ -397,11 +365,7 @@ class WameedSender(private val context: Context) {
     }
 
     fun sendText(text: String, callback: SendCallback) {
-        val isUrl = text.startsWith("http://") || text.startsWith("https://")
-        val payload = JSONObject().apply {
-            put("type", if (isUrl) "url" else "text")
-            if (isUrl) put("url", text) else put("text", text)
-        }
+        val payload = WameedProtocol.textOrUrlPayload(text)
 
         // ⚡ محاولة الإرسال الفوري عبر الاتصال الدائم
         if (isPersistentReady()) {
@@ -511,15 +475,7 @@ class WameedSender(private val context: Context) {
                 override fun onOpen(webSocket: WebSocket, response: Response) {
                     Log.d(TAG, "WebSocket مفتوح، إرسال التحية...")
                     bumpWatchdog()
-                    val hello = JSONObject().apply {
-                        put("type", "hello")
-                        put("device", WameedPrefs.getDeviceName())
-                        put("device_id", WameedPrefs.getOrCreateDeviceId(context))
-                        put("app_version", BuildConfig.VERSION_NAME)
-                        put("protocol_version", TRANSFER_PROTOCOL_VERSION)
-                        put("receiver_port", 7789)
-                    }
-                    webSocket.send(hello.toString())
+                    webSocket.send(WameedProtocol.hello(context).toString())
                 }
 
                 override fun onMessage(webSocket: WebSocket, text: String) {
@@ -528,8 +484,9 @@ class WameedSender(private val context: Context) {
                     try {
                         val resp = JSONObject(text)
                         when (resp.optString("status")) {
-                            "ready", "progress", "saving", "saved" -> {
-                                val received = resp.optLong("received_bytes", resp.optLong("received", -1L))
+                            WameedProtocol.STATUS_READY, WameedProtocol.STATUS_PROGRESS,
+                            WameedProtocol.STATUS_SAVING, WameedProtocol.STATUS_SAVED -> {
+                                val received = WameedProtocol.receivedBytes(resp)
                                 if (received >= 0L) {
                                     peerReceivedBytes.updateAndGet { old -> maxOf(old, received) }
                                 }
@@ -571,17 +528,17 @@ class WameedSender(private val context: Context) {
                 while (!finishedFlag.get() && !paired) {
                     val resp = responseQueue.poll(60, TimeUnit.SECONDS) ?: break
                     when (resp.optString("status")) {
-                        "pairing_required" -> {
+                        WameedProtocol.STATUS_PAIRING_REQUIRED -> {
                             Log.i(TAG, "حالة: انتظار موافقة الاقتران على الكمبيوتر")
                             callback.onInfo(context.getString(R.string.info_pairing_approval))
                         }
-                        "paired", "hello" -> {
+                        in WameedProtocol.PAIRED_STATUSES -> {
                             Log.i(TAG, "تم الاقتران بنجاح، البدء في إرسال الملفات")
                             paired = true
                             // ⚡ فتح اتصال دائم للعمليات المستقبلية
                             openPersistent(context)
                         }
-                        "rejected" -> {
+                        WameedProtocol.STATUS_REJECTED -> {
                             Log.w(TAG, "تم رفض طلب الاقتران من الكمبيوتر")
                             if (finishedFlag.compareAndSet(false, true)) {
                                 callback.onError(resp.optString("message", context.getString(R.string.error_pairing_rejected)))
@@ -665,26 +622,22 @@ class WameedSender(private val context: Context) {
                         break
                     }
 
-                    val chunkSize = TRANSFER_CHUNK_SIZE
+                    val chunkSize = WameedProtocol.TRANSFER_CHUNK_SIZE
                     val totalChunks = ((fileSize + chunkSize - 1) / chunkSize).toInt()
-                    val transferId = createTransferId(filename, fileSize)
+                    val transferId = WameedProtocol.transferId(filename, fileSize)
                     peerReceivedBytes.set(0L)
                     setPhase("transfer", fileSize, 0L)
 
                     // Send metadata
                     Log.d(TAG, "إرسال البيانات الوصفية للملف: $filename (Chunks: $totalChunks)")
-                    val meta = JSONObject().apply {
-                        put("type", "file_meta")
-                        put("protocol_version", TRANSFER_PROTOCOL_VERSION)
-                        put("transfer_id", transferId)
-                        put("direction", "android_to_windows")
-                        put("filename", filename)
-                        put("mime", mimeType)
-                        put("size", fileSize)
-                        put("chunks", totalChunks)
-                        put("chunk_size", chunkSize)
-                        put("display_mode", WameedPrefs.getDisplayMode(context))
-                    }
+                    val meta = WameedProtocol.fileMeta(
+                        transferId = transferId,
+                        filename = filename,
+                        mime = mimeType,
+                        size = fileSize,
+                        chunks = totalChunks,
+                        displayMode = WameedPrefs.getDisplayMode(context),
+                    )
                     currentWebSocket?.send(meta.toString())
                     bumpWatchdog()
 
@@ -692,7 +645,7 @@ class WameedSender(private val context: Context) {
                     val readyResp = responseQueue.poll(750, TimeUnit.MILLISECONDS)
                     if (readyResp != null) {
                         when (readyResp.optString("status")) {
-                            "ready" -> {
+                            WameedProtocol.STATUS_READY -> {
                                 resumeOffset = readyResp.optLong("offset", 0L).coerceIn(0L, fileSize)
                                 peerReceivedBytes.set(resumeOffset)
                                 if (resumeOffset > 0L) {
@@ -701,7 +654,7 @@ class WameedSender(private val context: Context) {
                                     callback.onProgress(((resumeOffset * 100) / fileSize).toInt())
                                 }
                             }
-                            "error" -> {
+                            WameedProtocol.STATUS_ERROR -> {
                                 WameedLogger.e(TAG, "الكمبيوتر رفض استقبال الملف: ${readyResp.optString("message")}")
                                 callback.onError(readyResp.optString("message", context.getString(R.string.error_save_failed)))
                                 finishedFlag.set(true)
@@ -731,15 +684,14 @@ class WameedSender(private val context: Context) {
                                 while (true) {
                                     val resp = responseQueue.poll() ?: break
                                     when (resp.optString("status")) {
-                                        "progress", "ready", "saving" -> {
-                                            val received = resp.optLong(
-                                                "received_bytes",
-                                                resp.optLong("received", peerReceivedBytes.get())
-                                            ).coerceIn(0L, fileSize)
+                                        WameedProtocol.STATUS_PROGRESS, WameedProtocol.STATUS_READY,
+                                        WameedProtocol.STATUS_SAVING -> {
+                                            val received = WameedProtocol.receivedBytes(resp, peerReceivedBytes.get())
+                                                .coerceIn(0L, fileSize)
                                             peerReceivedBytes.updateAndGet { old -> maxOf(old, received) }
                                             currentBytesDone.set(peerReceivedBytes.get())
                                             bumpWatchdog()
-                                            if (resp.optString("status") == "saving") {
+                                            if (resp.optString("status") == WameedProtocol.STATUS_SAVING) {
                                                 responseQueue.offer(resp)
                                                 break
                                             }
@@ -892,21 +844,21 @@ class WameedSender(private val context: Context) {
                         }
 
                         val status = resp.optString("status")
-                        if (status == "saved") {
+                        if (status == WameedProtocol.STATUS_SAVED) {
                             Log.i(TAG, "✅ تأكيد الحفظ: $filename")
                             ackReceived = true
                             callback.onProgress(100)
                             break
-                        } else if (status == "saving") {
+                        } else if (status == WameedProtocol.STATUS_SAVING) {
                             Log.d(TAG, "الطرف الآخر يقوم بحفظ الملف حالياً...")
                             bumpWatchdog() // Reset watchdog because we know it's working
-                        } else if (status == "progress") {
-                            val received = resp.optLong("received_bytes", resp.optLong("received", currentBytesDone.get()))
+                        } else if (status == WameedProtocol.STATUS_PROGRESS) {
+                            val received = WameedProtocol.receivedBytes(resp, currentBytesDone.get())
                             if (received > 0L) {
                                 currentBytesDone.set(received.coerceAtMost(fileSize))
                             }
                             bumpWatchdog()
-                        } else if (status == "error") {
+                        } else if (status == WameedProtocol.STATUS_ERROR) {
                             WameedLogger.e(TAG, "❌ فشل حفظ الملف على الكمبيوتر: ${resp.optString("message")}")
                             callback.onError(resp.optString("message", context.getString(R.string.error_save_failed)))
                             finishedFlag.set(true)
@@ -951,19 +903,13 @@ class WameedSender(private val context: Context) {
         // For ping we can skip pairing (server allows ping pre-trust). For
         // text/url we must wait for `paired` before sending the payload.
         val payloadType = try { JSONObject(payload).optString("type", "") } catch (_: Exception) { "" }
-        val needsPairing = payloadType in setOf("text", "url")
+        val needsPairing = payloadType in setOf(WameedProtocol.TYPE_TEXT, WameedProtocol.TYPE_URL)
         val payloadSent = java.util.concurrent.atomic.AtomicBoolean(false)
         val finishedFlag = java.util.concurrent.atomic.AtomicBoolean(false)
 
         client.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
-                val hello = JSONObject().apply {
-                    put("type", "hello")
-                    put("device", WameedPrefs.getDeviceName())
-                    put("device_id", WameedPrefs.getOrCreateDeviceId(context))
-                    put("app_version", BuildConfig.VERSION_NAME)
-                }
-                webSocket.send(hello.toString())
+                webSocket.send(WameedProtocol.hello(context).toString())
                 // For ping we fire the payload immediately (server responds pong
                 // without requiring trust — used for TCP preflight and keep-alive).
                 if (!needsPairing && payloadSent.compareAndSet(false, true)) {
@@ -974,18 +920,18 @@ class WameedSender(private val context: Context) {
                 if (finishedFlag.get()) return
                 val status = try { JSONObject(text).optString("status", "") } catch (_: Exception) { "" }
                 when (status) {
-                    "pairing_required" -> callback.onInfo(context.getString(R.string.info_waiting_approval))
-                    "paired", "hello" -> {
+                    WameedProtocol.STATUS_PAIRING_REQUIRED -> callback.onInfo(context.getString(R.string.info_waiting_approval))
+                    in WameedProtocol.PAIRED_STATUSES -> {
                         if (needsPairing && payloadSent.compareAndSet(false, true)) {
                             webSocket.send(payload)
                         }
                         // ⚡ فتح اتصال دائم للعمليات المستقبلية
                         openPersistent(context)
                     }
-                    "saving" -> {
+                    WameedProtocol.STATUS_SAVING -> {
                         // Reset possible internal watchdog if we had one for single sends
                     }
-                    "rejected" -> {
+                    WameedProtocol.STATUS_REJECTED -> {
                         if (finishedFlag.compareAndSet(false, true)) {
                             callback.onError(try { JSONObject(text).optString("message",
                                 context.getString(R.string.error_pairing_rejected)) } catch (_: Exception) {
@@ -993,7 +939,7 @@ class WameedSender(private val context: Context) {
                             try { webSocket.close(1000, null) } catch (_: Exception) {}
                         }
                     }
-                    "pong", "saved" -> {
+                    WameedProtocol.STATUS_PONG, WameedProtocol.STATUS_SAVED -> {
                         if (finishedFlag.compareAndSet(false, true)) {
                             markSendSuccess()
                             callback.onSuccess(context.getString(R.string.status_sent))
@@ -1015,14 +961,6 @@ class WameedSender(private val context: Context) {
                 }
             }
         })
-    }
-
-    private fun createTransferId(filename: String, fileSize: Long): String {
-        val raw = "${filename.trim().lowercase()}:$fileSize"
-        val digest = java.security.MessageDigest.getInstance("SHA-256")
-            .digest(raw.toByteArray(Charsets.UTF_8))
-            .joinToString("") { "%02x".format(it) }
-        return "a2w-${digest.take(20)}"
     }
 
     private fun skipFully(stream: java.io.InputStream, bytesToSkip: Long, scratch: ByteArray) {

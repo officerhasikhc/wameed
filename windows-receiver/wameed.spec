@@ -8,7 +8,7 @@ try:
     hiddenimports += collect_submodules('winotify')
 except Exception:
     pass
-datas = [('src\\wameed.ico', '.'), ('..\\version.properties', '.')]
+datas = [('src\\wameed.ico', '.'), ('src\\icons', 'icons'), ('..\\version.properties', '.')]
 datas += collect_data_files('customtkinter')
 
 

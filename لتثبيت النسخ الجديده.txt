@@ -6,7 +6,8 @@ versionCode
 releaseTag
 ملاحظات الإصدار إذا أردت: androidReleaseNotes وwindowsReleaseNotes
 
-.\scripts\sync-version.ps1
+.\scripts\sync-version.ps1     #لتحديث النصوص فقط بقيه امللفات
 .\scripts\verify-version.ps1
 
+.\package-release.ps1 
 يقوم السريبت بتحديث json والبقيه

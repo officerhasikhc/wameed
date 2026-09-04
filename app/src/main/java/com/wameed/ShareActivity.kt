@@ -64,7 +64,13 @@ sealed class SendState {
         val total: Int = 1
     ) : SendState()
     data class Success(val message: String) : SendState()
-    data class Error(val message: String) : SendState()
+    data class Error(
+        val message: String,
+        // null = fall back to today's keyword-sniffing in ErrorContent; set explicitly
+        // to avoid a false positive when a message legitimately mentions "computer"
+        // without actually being the unconfigured-PC case (see waiting_for_activation flow).
+        val forceShowOpenSettings: Boolean? = null
+    ) : SendState()
 }
 
 // ─────────────────────────────────────────
@@ -307,6 +313,7 @@ private fun SheetContent(
                     is SendState.Success -> SuccessContent(state.message)
                     is SendState.Error -> ErrorContent(
                         message = state.message,
+                        forceShowOpenSettings = state.forceShowOpenSettings,
                         onOpenSettings = onOpenSettings,
                         onRetry = onCancel
                     )
@@ -442,6 +449,7 @@ private fun SuccessContent(message: String) {
 @Composable
 private fun ErrorContent(
     message: String,
+    forceShowOpenSettings: Boolean?,
     onOpenSettings: () -> Unit,
     onRetry: () -> Unit
 ) {
@@ -476,15 +484,20 @@ private fun ErrorContent(
 
         Spacer(modifier = Modifier.height(20.dp))
 
-        // زر الإعدادات — إذا كانت المشكلة في الاتصال
+        // زر الإعدادات — إذا كانت المشكلة في الاتصال. forceShowOpenSettings يتجاوز
+        // البحث عن كلمات مفتاحية عندما تكون الحالة معروفة مسبقاً من مصدر الخطأ نفسه
+        // (مثل رسالة "تعذر الوصول للجهاز المستقبل" التي تحتوي كلمة "كمبيوتر" لكنها
+        // ليست حالة عدم إعداد الكمبيوتر).
         val connectionKeywords = listOf(
             context.getString(R.string.label_pc_generic),
             context.getString(R.string.not_connected)
         )
-        if (connectionKeywords.any { message.contains(it, ignoreCase = true) } ||
+        val showOpenSettings = forceShowOpenSettings ?: (
+            connectionKeywords.any { message.contains(it, ignoreCase = true) } ||
             message.contains("كمبيوتر") || message.contains("اتصال") || message.contains("شبكة") ||
             message.contains("connect", ignoreCase = true) || message.contains("network", ignoreCase = true)
-        ) {
+        )
+        if (showOpenSettings) {
             WameedPrimaryButton(
                 text = stringResource(R.string.open_settings),
                 onClick = onOpenSettings,
@@ -525,51 +538,107 @@ private suspend fun startSending(
     }
 }
 
-private suspend fun verifyShareSendReady(
-    sender: WameedSender,
-    activity: ShareActivity,
-    onState: (SendState) -> Unit
-): Boolean = suspendCancellableCoroutine { cont ->
-    val resumed = AtomicBoolean(false)
-    fun finish(value: Boolean) {
-        if (resumed.compareAndSet(false, true) && cont.isActive) {
-            cont.resume(value)
-        }
-    }
+/** One WebSocket connect+pair attempt. Doesn't retry — [verifyShareSendReady] loops this. */
+private data class VerifyAttemptResult(val success: Boolean, val retryable: Boolean, val message: String)
 
-    activity.runOnUiThread {
-        onState(SendState.Sending(label = activity.getString(R.string.verifying_send_ready)))
+private suspend fun attemptVerifyOnce(
+    sender: WameedSender,
+    onInfo: (String) -> Unit
+): VerifyAttemptResult = suspendCancellableCoroutine { cont ->
+    val resumed = AtomicBoolean(false)
+    fun finish(result: VerifyAttemptResult) {
+        if (resumed.compareAndSet(false, true) && cont.isActive) {
+            cont.resume(result)
+        }
     }
 
     sender.verifySendReady(object : WameedSender.SendCallback {
         override fun onSuccess(message: String) {
-            activity.runOnUiThread {
-                onState(SendState.Sending(label = activity.getString(R.string.sending)))
-            }
-            finish(true)
+            finish(VerifyAttemptResult(success = true, retryable = false, message = message))
         }
 
         override fun onError(error: String) {
-            activity.runOnUiThread {
-                onState(
-                    SendState.Error(
-                        activity.getString(R.string.send_preflight_inline_error, error)
-                    )
-                )
-            }
-            finish(false)
+            // Only reached if some future caller invokes the 1-arg overload directly;
+            // verifySendReady itself always calls the 2-arg classified overload below.
+            finish(VerifyAttemptResult(success = false, retryable = true, message = error))
+        }
+
+        override fun onError(error: String, retryable: Boolean) {
+            finish(VerifyAttemptResult(success = false, retryable = retryable, message = error))
         }
 
         override fun onInfo(message: String) {
-            activity.runOnUiThread {
-                onState(SendState.Sending(label = message))
-            }
+            onInfo(message)
         }
 
         override fun onProgress(percent: Int) {}
     })
 
     cont.invokeOnCancellation { resumed.set(true) }
+}
+
+/**
+ * Verifies the PC is reachable before sending, retrying silently for [totalBudgetMs] if it
+ * isn't — the common case being the PC app simply hasn't been opened yet. This lets a user
+ * share a file from their phone without opening Wameed first: if they then open the PC app
+ * within the retry window, the pending share just completes with no extra tap needed.
+ */
+private suspend fun verifyShareSendReady(
+    sender: WameedSender,
+    activity: ShareActivity,
+    onState: (SendState) -> Unit
+): Boolean {
+    val totalBudgetMs = 75_000L
+    val retryIntervalMs = 4_000L
+    val friendlyLabelAfterMs = 12_000L
+    val deadline = System.currentTimeMillis() + totalBudgetMs
+
+    while (true) {
+        val elapsed = totalBudgetMs - (deadline - System.currentTimeMillis())
+        activity.runOnUiThread {
+            onState(
+                SendState.Sending(
+                    label = activity.getString(
+                        if (elapsed < friendlyLabelAfterMs) R.string.verifying_send_ready
+                        else R.string.waiting_for_activation
+                    )
+                )
+            )
+        }
+
+        val result = attemptVerifyOnce(sender) { infoMessage ->
+            activity.runOnUiThread { onState(SendState.Sending(label = infoMessage)) }
+        }
+
+        if (result.success) {
+            activity.runOnUiThread {
+                onState(SendState.Sending(label = activity.getString(R.string.sending)))
+            }
+            return true
+        }
+
+        val timeExhausted = System.currentTimeMillis() >= deadline
+        if (!result.retryable || timeExhausted) {
+            val finalMessage = if (result.retryable)
+                activity.getString(R.string.error_receiver_not_ready_after_retry)
+            else
+                activity.getString(R.string.send_preflight_inline_error, result.message)
+            activity.runOnUiThread {
+                onState(
+                    SendState.Error(
+                        message = finalMessage,
+                        // Non-retryable failures keep the existing keyword-sniffed behavior;
+                        // the retry-exhausted message deliberately never shows "Open Settings"
+                        // since the device *is* configured, it's just not open right now.
+                        forceShowOpenSettings = if (result.retryable) false else null
+                    )
+                )
+            }
+            return false
+        }
+
+        delay(retryIntervalMs)
+    }
 }
 
 private fun sendText(

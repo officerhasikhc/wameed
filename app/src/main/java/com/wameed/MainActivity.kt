@@ -829,7 +829,11 @@ fun MainScreen(sender: WameedSender, discovery: DeviceDiscovery, updateManager: 
                     if (manualIp.isNotBlank()) {
                         val parts = manualIp.trim().split(":")
                         val ip = parts[0]
-                        val port = if (parts.size > 1) parts[1].toIntOrNull() ?: 7788 else 7788
+                        val port = if (parts.size > 1) {
+                            parts[1].toIntOrNull() ?: WameedProtocol.PC_WS_PORT
+                        } else {
+                            WameedProtocol.PC_WS_PORT
+                        }
                         val device = DeviceDiscovery.DiscoveredDevice(ip, ip, port)
                         connectToDevice(device)
                         showManualDialog.value = false
@@ -967,13 +971,6 @@ fun ConnectionTab(
                         }
                     }
                 }
-                Spacer(Modifier.height(12.dp))
-                WameedPrimaryButton(
-                    text = if (isSendingBatch) stringResource(R.string.sending) else stringResource(R.string.send_all),
-                    onClick = onConfirmSend,
-                    enabled = connectionState == ConnectionState.Connected && !isSendingBatch,
-                    loading = isSendingBatch
-                )
             }
             Spacer(Modifier.height(18.dp))
         }
