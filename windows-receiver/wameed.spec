@@ -27,19 +27,19 @@ a = Analysis(
 )
 pyz = PYZ(a.pure)
 
+# onedir: الملفات تُفك مرة واحدة وقت التثبيت بدل فك ضغط _MEI عند كل تشغيل.
+# هذا يزيل فشل "Failed to load Python DLL" المتقطع (سباق فحص Defender مع
+# الاستخراج المؤقت) ويخفض زمن الإقلاع من عشرات الثواني إلى ثوانٍ.
 exe = EXE(
     pyz,
     a.scripts,
-    a.binaries,
-    a.datas,
     [],
+    exclude_binaries=True,
     name='Wameed',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
     upx=False,
-    upx_exclude=['vcruntime140.dll', 'vcruntime140_1.dll', 'msvcp140.dll', 'msvcp140_1.dll', 'ucrtbase.dll', 'python312.dll', 'python3.dll'],
-    runtime_tmpdir=None,
     console=False,
     disable_windowed_traceback=False,
     argv_emulation=False,
@@ -48,4 +48,14 @@ exe = EXE(
     codesign_identity=None,
     entitlements_file=None,
     icon=['src\\wameed.ico'],
+)
+
+coll = COLLECT(
+    exe,
+    a.binaries,
+    a.datas,
+    strip=False,
+    upx=False,
+    upx_exclude=['vcruntime140.dll', 'vcruntime140_1.dll', 'msvcp140.dll', 'msvcp140_1.dll', 'ucrtbase.dll', 'python312.dll', 'python3.dll'],
+    name='Wameed',
 )
