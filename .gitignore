@@ -27,3 +27,9 @@ keystore.properties
 *.apk
 *.aar
 *.ap_
+
+# Windows receiver build outputs (artifacts ship via GitHub Releases, not git)
+windows-receiver/dist/
+windows-receiver/installer/Output/
+windows-receiver/.pip-deps-hash
+release/*.exe

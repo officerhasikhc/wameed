@@ -50,16 +50,13 @@ Remove-Item "$releaseDir\WameedSetup-*.exe" -Force -ErrorAction SilentlyContinue
 Remove-Item "$releaseDir\Wameed.exe" -Force -ErrorAction SilentlyContinue
 
 $installer = "$root\windows-receiver\installer\Output\WameedSetup-$version.exe"
-$exe = "$root\windows-receiver\dist\Wameed.exe"
 
 if (Test-Path -LiteralPath $installer) {
     Copy-Item $installer $releaseDir
     $artifact = "$releaseDir\WameedSetup-$version.exe"
-} elseif (Test-Path -LiteralPath $exe) {
-    Copy-Item $exe "$releaseDir\Wameed.exe"
-    $artifact = "$releaseDir\Wameed.exe"
 } else {
-    throw "Windows build finished, but no Wameed installer or exe was found."
+    # بنية onedir: لا يوجد exe مستقل — المثبّت هو الناتج الوحيد القابل للتوزيع.
+    throw "Windows build finished, but no Wameed installer was found (onedir build requires Inno Setup)."
 }
 
 & "$root\scripts\verify-version.ps1"

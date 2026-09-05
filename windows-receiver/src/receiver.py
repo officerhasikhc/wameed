@@ -167,6 +167,7 @@ translations = {
         "trusted_devices": "الأجهزة الموثوقة",
         "delete_device": "🗑️ حذف الجهاز",
         "no_history": "لا يوجد سجل بعد 📭",
+        "history_show_all": "عرض السجل الأقدم ({count})",
         "no_devices": "لا توجد أجهزة متصلة 🔍",
         "last_connected": "آخر اتصال: {time}",
         "connected_now": "● متصل الآن",
@@ -298,6 +299,7 @@ translations = {
         "trusted_devices": "Trusted Devices",
         "delete_device": "🗑️ Delete Device",
         "no_history": "No history yet 📭",
+        "history_show_all": "Show older items ({count})",
         "no_devices": "No connected devices 🔍",
         "last_connected": "Last connected: {time}",
         "connected_now": "● Connected now",
@@ -1039,21 +1041,30 @@ class WameedApp:
         self.nb.add(self.tab_history, text=t("tab_history"))
         self.nb.add(self.tab_settings, text=t("tab_settings"))
 
+        # بناء كسول: الرئيسية فقط عند الإقلاع — بقية التبويبات تُبنى عند أول فتح.
+        # بناء الأربعة معاً كان يستهلك معظم زمن الإقلاع (عناصر CustomTkinter مكلفة
+        # وتبويب السجل وحده يبني بطاقة لكل عنصر)، بينما تبويبا الأجهزة والسجل
+        # يُعاد بناؤهما عند كل اختيار أصلاً.
+        _ui_t0 = time.time()
         self._build_home()
-        self._build_devices()
-        self._build_history()
-        self._build_settings()
+        self._settings_built = False
+        logger.info("بناء الواجهة: home=%.1fs (بقية التبويبات تُبنى عند فتحها)" % (time.time() - _ui_t0))
 
         # تسجيل التنقل بين التبويبات
         tab_names = {0: "الرئيسية", 1: "الأجهزة", 2: "السجل", 3: "الإعدادات"}
         def on_tab_changed(event):
             idx = self.nb.index(self.nb.select())
             logger.info(f"📑 انتقال إلى تبويب: {tab_names.get(idx, idx)}")
-            # تحديث البيانات عند التنقل
+            # تحديث البيانات عند التنقل (والبناء الأول للتبويبات الكسولة)
             if idx == 0: self._update_status_display(); self._refresh_home_attachment_ui()
             elif idx == 1: self._build_devices()
             elif idx == 2: self._build_history()
-        self.nb.bind("<<NotebookTabSelect>>", on_tab_changed)
+            elif idx == 3 and not self._settings_built:
+                self._build_settings()
+                self._settings_built = True
+        # ملاحظة: الاسم الصحيح للحدث هو <<NotebookTabChanged>> — الربط السابق كان
+        # على <<NotebookTabSelect>> وهو حدث غير موجود فلم يعمل تحديث التبويبات قط.
+        self.nb.bind("<<NotebookTabChanged>>", on_tab_changed)
 
         # بدء فحص حالة الاتصال الدوري
         self._start_connection_monitor()
@@ -1246,7 +1257,12 @@ class WameedApp:
             width=110,
         ).pack(side="right" if LANG == "ar" else "left")
 
-        # لوحة إرسال نص/رابط — مطوية افتراضياً، بدون نافذة منفصلة.
+        # لوحة إرسال نص/رابط — مطوية افتراضياً وتُبنى عند أول فتح (كسل يسرّع الإقلاع)
+        self.home_text_frame = None
+
+        self._refresh_home_attachment_ui()
+
+    def _build_home_text_panel(self):
         self.home_text_frame = tk.Frame(self.tab_home, bg=T.SURFACE)
         tk.Label(
             self.home_text_frame,
@@ -1288,10 +1304,11 @@ class WameedApp:
         self._modern_button(text_tools, text=t("send_now"), command=self._send_home_text,
                             variant="primary", width=120).pack(side="left" if LANG == "ar" else "right")
 
-        self._refresh_home_attachment_ui()
-
     def _toggle_home_text_panel(self):
-        if self.home_text_frame.winfo_ismapped():
+        if self.home_text_frame is None:
+            self._build_home_text_panel()
+            self.home_text_frame.pack(fill="x")
+        elif self.home_text_frame.winfo_ismapped():
             self.home_text_frame.pack_forget()
         else:
             self.home_text_frame.pack(fill="x")
@@ -2173,7 +2190,22 @@ class WameedApp:
             }
             return icons.get(ext, '📎')
 
-        for entry in reversed(state["history"]):
+        # عرض أحدث دفعة فقط — بطاقات CustomTkinter مكلفة، وعرض السجل كاملاً
+        # دفعة واحدة كان يجمّد الواجهة ثوانيَ على الأجهزة البطيئة.
+        history_limit = getattr(self, "_history_limit", 30)
+        entries = list(reversed(state["history"]))
+        remaining = len(entries) - history_limit
+        if remaining > 0:
+            def _show_all_history():
+                self._history_limit = len(state["history"])
+                self._build_history()
+            self._modern_button(
+                frame,
+                text=t("history_show_all").format(count=remaining),
+                command=_show_all_history,
+                variant="muted",
+            ).pack(fill="x", padx=15, pady=(8, 2))
+        for entry in entries[:history_limit]:
             # بطاقة الملف
             direction = entry.get("direction", "received")
             card_bg = T.SURFACE
@@ -2814,6 +2846,11 @@ if ($LaunchExe) {{
                 creationflags=flags
             )
             logger.info(f"Windows update installer launched: {installer_path}; script={script_path}")
+            # إشعار مرئي قبل إغلاق التطبيق — يغطي الفجوة حتى ظهور نافذة تقدم المثبّت
+            show_notification(
+                "وميض - تحديث",
+                "سيُغلق وميض الآن ويبدأ التثبيت. ستظهر نافذة التقدم خلال لحظات ثم يعود التطبيق تلقائياً."
+            )
             try:
                 if dialog and dialog.winfo_exists():
                     dialog.destroy()
@@ -3597,9 +3634,13 @@ if ($LaunchExe) {{
         save_config()
 
     def refresh_devices_list(self):
-        self.devices_list.delete(0, tk.END)
+        # قائمة الأجهزة تعيش في تبويب الإعدادات الذي يُبنى كسولاً — قد لا توجد بعد
+        devices_list = getattr(self, "devices_list", None)
+        if devices_list is None:
+            return
+        devices_list.delete(0, tk.END)
         for d in state["trusted_devices"]:
-            self.devices_list.insert(tk.END, f"{d['name']} ({d['id'][:8]}...)")
+            devices_list.insert(tk.END, f"{d['name']} ({d['id'][:8]}...)")
 
     def remove_device(self):
         selection = self.devices_list.curselection()
@@ -3624,7 +3665,16 @@ if ($LaunchExe) {{
         if len(state["history"]) > 100: state["history"].pop(0)
         save_config()
         self.root.after(0, self._refresh_recent)
-        self.root.after(0, self._build_history)
+
+        # أعد بناء تبويب السجل فقط إذا كان معروضاً الآن — إعادة بنائه عند كل
+        # عنصر وارد كانت تجمّد الواجهة أثناء الاستقبال؛ التبويب يُبنى عند فتحه.
+        def _refresh_history_if_visible():
+            try:
+                if self.nb.index(self.nb.select()) == 2:
+                    self._build_history()
+            except Exception:
+                pass
+        self.root.after(0, _refresh_history_if_visible)
 
     def update_device_history(self, device_id, device_name):
         """تحديث سجل الأجهزة المتصلة"""
@@ -4281,6 +4331,46 @@ def udp_broadcast():
             pass
         logger.info("مستجيب UDP توقف")
 
+# ======================== Temp Cleanup ========================
+def _cleanup_orphaned_pyinstaller_dirs():
+    """حذف مجلدات _MEI* اليتيمة من Temp — مخلفات إغلاقات قسرية لنسخ onefile القديمة.
+
+    فحص الحياة: إعادة تسمية المجلد تفشل على ويندوز إذا كانت ملفاته مفتوحة من
+    عملية حيّة، لذا نعيد التسمية أولاً؛ نجاحها يثبت أن المجلد يتيم فنحذفه.
+    """
+    try:
+        current = getattr(sys, "_MEIPASS", None)
+        temp_dir = os.environ.get("TEMP") or os.environ.get("TMP")
+        if not temp_dir or not os.path.isdir(temp_dir):
+            return
+        removed = 0
+        for name in os.listdir(temp_dir):
+            if not (name.startswith("_MEI") and (name.endswith(".stale") or name[4:].isdigit())):
+                continue
+            path = os.path.join(temp_dir, name)
+            if not os.path.isdir(path):
+                continue
+            if current and os.path.normcase(path) == os.path.normcase(current):
+                continue
+            try:
+                if name.endswith(".stale"):
+                    shutil.rmtree(path, ignore_errors=True)
+                    removed += 1
+                    continue
+                # لا تلمس مجلداً حديثاً — قد يخص عملية بدأت للتو ولم تفتح ملفاتها بعد
+                if time.time() - os.path.getmtime(path) < 3600:
+                    continue
+                probe = path + ".stale"
+                os.rename(path, probe)  # يفشل إذا كانت العملية المالكة حيّة
+                shutil.rmtree(probe, ignore_errors=True)
+                removed += 1
+            except OSError:
+                continue  # قيد الاستخدام — تخطَّ بأمان
+        if removed:
+            logger.info(f"تنظيف Temp: حذف {removed} مجلد _MEI يتيم")
+    except Exception as exc:
+        logger.debug(f"_MEI cleanup skipped: {exc}")
+
 # ======================== Single Instance Lock ========================
 _instance_lock_sock = None
 
@@ -4372,6 +4462,10 @@ if __name__ == "__main__":
         sys.exit(0)
 
     atexit.register(_cleanup_on_exit)
+
+    # تنظيف مخلفات النسخ القديمة (onefile) في الخلفية — لا يؤخر الإقلاع
+    threading.Thread(target=_cleanup_orphaned_pyinstaller_dirs,
+                     daemon=True, name="WameedTempCleanup").start()
 
     logger.info("="*60)
     logger.info(f"--- بدء تشغيل تطبيق وميض (Wameed) الإصدار {VERSION} ---")

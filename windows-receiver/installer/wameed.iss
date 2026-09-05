@@ -24,7 +24,12 @@ OutputDir=Output
 OutputBaseFilename=WameedSetup-{#AppVersion}
 SetupIconFile=..\src\wameed.ico
 UninstallDisplayIcon={app}\{#AppExe}
-Compression=lzma2/ultra
+; max بدل ultra: نفس الحجم تقريباً وأسرع بالدقائق في الترجمة (قسنا ultra = 114 ثانية)
+; يمكن تمرير /DCompressionLevel=lzma2/fast من سطر الأوامر لبناء تجريبي أسرع.
+#ifndef CompressionLevel
+  #define CompressionLevel "lzma2/max"
+#endif
+Compression={#CompressionLevel}
 SolidCompression=yes
 WizardStyle=modern
 PrivilegesRequired=admin
@@ -56,8 +61,16 @@ Name: "desktopicon";  Description: "{cm:CreateDesktopIcon}";   GroupDescription:
 Name: "autostart";    Description: "{cm:AutostartDesc}"; GroupDescription: "{cm:AutostartGroup}"
 Name: "firewall";     Description: "{cm:FirewallDesc}"; GroupDescription: "{cm:FirewallGroup}"
 
+[InstallDelete]
+; امسح بقايا الإصدارات السابقة قبل النسخ:
+; - Wameed.exe القديم بنمط onefile
+; - مكتبات _internal القديمة (خليط DLLs من إصدارين يسبب أعطال تحميل)
+Type: files;          Name: "{app}\Wameed.exe"
+Type: filesandordirs; Name: "{app}\_internal"
+
 [Files]
-Source: "..\dist\Wameed.exe"; DestDir: "{app}"; Flags: ignoreversion
+; بنية onedir: التنفيذي + مجلد _internal بكل المكتبات (لا فك ضغط عند التشغيل)
+Source: "..\dist\Wameed\*";   DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "..\src\wameed.ico";  DestDir: "{app}"; Flags: ignoreversion
 Source: "README-install.md";  DestDir: "{app}"; Flags: ignoreversion isreadme
 Source: "LICENSE.txt";        DestDir: "{app}"; Flags: ignoreversion
